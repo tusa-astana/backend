@@ -55,7 +55,7 @@ public class AnalyticsController : ControllerBase
     public IActionResult Summary([FromHeader(Name = "X-Telegram-Init-Data")] string? initData)
     {
         var user = _auth.ValidateInitData(initData);
-        if (user is null || !_users.IsAdmin(user.Id)) return Forbid();
+        if (user is null || !_users.IsAdmin(user.Id)) return StatusCode(StatusCodes.Status403Forbidden);
         var summary = _db.FunnelEvents.AsNoTracking().GroupBy(x => x.Name).Select(group => new { name = group.Key, count = group.Count() }).ToList();
         return Ok(summary);
     }
