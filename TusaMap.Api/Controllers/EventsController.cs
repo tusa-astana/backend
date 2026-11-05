@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
 using System.ComponentModel.DataAnnotations;
+using System.Globalization;
 using TusaMap.Api.Models;
 using TusaMap.Api.Services;
 using TusaMap.Api.Data;
@@ -31,7 +32,11 @@ public class EventsController : ControllerBase
     [HttpGet]
     public ActionResult<IEnumerable<EventItem>> Get([FromQuery] string? category = null, [FromQuery] string? q = null)
     {
-        var list = _store.GetAll();
+        var todayInAstana = DateOnly.FromDateTime(DateTime.UtcNow.AddHours(5));
+        var list = _store.GetAll()
+            .Where(eventItem => DateOnly.TryParseExact(eventItem.Date, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var eventDate)
+                && eventDate >= todayInAstana)
+            .ToList();
         if (!string.IsNullOrEmpty(category))
             list = list.Where(e => string.Equals(e.Category, category, StringComparison.OrdinalIgnoreCase)).ToList();
         if (!string.IsNullOrWhiteSpace(q))

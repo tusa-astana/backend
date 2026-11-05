@@ -123,6 +123,23 @@ if (app.Environment.IsDevelopment() && !builder.Configuration.GetValue("Telegram
 app.UseRouting();
 app.UseCors();
 app.UseRateLimiter();
+app.MapGet("/api/health", async (TusaMapDbContext db, CancellationToken cancellationToken) =>
+{
+    try
+    {
+        var connected = await db.Database.CanConnectAsync(cancellationToken);
+        var database = db.Database.ProviderName?.Contains("Npgsql", StringComparison.OrdinalIgnoreCase) == true
+            ? "PostgreSQL"
+            : "SQLite";
+        return connected
+            ? Results.Ok(new { status = "ok", database })
+            : Results.Json(new { status = "unavailable", database }, statusCode: StatusCodes.Status503ServiceUnavailable);
+    }
+    catch
+    {
+        return Results.Json(new { status = "unavailable" }, statusCode: StatusCodes.Status503ServiceUnavailable);
+    }
+});
 app.UseDefaultFiles();
 app.UseStaticFiles();
 app.MapControllers();

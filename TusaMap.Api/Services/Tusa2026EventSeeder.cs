@@ -11,9 +11,15 @@ public static class Tusa2026EventSeeder
 
     public static void Ensure(TusaMapDbContext db, IConfiguration configuration)
     {
-        if (!configuration.GetValue("Events:Tusa2026:Enabled", true)) return;
+        if (!configuration.GetValue("Events:Tusa2026:Enabled", false)) return;
 
-        var date = configuration["Events:Tusa2026:Date"] ?? "2026-10-02";
+        var configuredDate = configuration["Events:Tusa2026:Date"];
+        if (string.IsNullOrWhiteSpace(configuredDate) ||
+            !DateOnly.TryParseExact(configuredDate, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var eventDate) ||
+            eventDate < DateOnly.FromDateTime(DateTime.UtcNow.AddHours(5)))
+            return;
+
+        var date = configuredDate;
         var time = configuration["Events:Tusa2026:Time"] ?? "19:00";
         if (!DateTimeOffset.TryParse($"{date}T{time}:00+05:00", CultureInfo.InvariantCulture, DateTimeStyles.None, out var startAt))
             throw new InvalidOperationException("Events:Tusa2026:Date/Time must be a valid Astana local date/time.");
