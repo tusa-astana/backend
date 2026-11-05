@@ -11,7 +11,8 @@ namespace TusaMap.Api.Controllers;
 [Route("api/analytics")]
 public class AnalyticsController : ControllerBase
 {
-    private static readonly string[] AllowedEvents = ["catalog_view", "event_open", "event_share"];
+    private static readonly string[] AllowedEvents = ["catalog_view", "event_open", "event_share", "community_open"];
+    private static readonly string[] AllowedCommunityRefs = ["rollmove-astana"];
     private readonly TusaMapDbContext _db;
     private readonly ITelegramAuthService _auth;
     private readonly IUserStore _users;
@@ -30,6 +31,11 @@ public class AnalyticsController : ControllerBase
         if (!AllowedEvents.Contains(request.Name, StringComparer.Ordinal)) return BadRequest("Unknown analytics event");
         if (request.Name == "catalog_view" && request.EventId is not null)
             return BadRequest("Catalog views cannot target an event");
+
+        if (request.Name == "community_open" &&
+            (request.EventId is not null || string.IsNullOrWhiteSpace(request.Ref) ||
+             !AllowedCommunityRefs.Contains(request.Ref, StringComparer.Ordinal)))
+            return BadRequest("Community opens require a known community reference");
 
         if (request.Name is "event_open" or "event_share")
         {
