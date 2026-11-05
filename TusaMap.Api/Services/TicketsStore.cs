@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using TusaMap.Api.Models;
 using Microsoft.EntityFrameworkCore;
 using TusaMap.Api.Data;
@@ -44,7 +45,7 @@ public class TicketsStore : ITicketsStore
         ticket.PaymentStatus = "paid";
         ticket.TelegramPaymentChargeId = telegramPaymentChargeId;
         ticket.ProviderPaymentChargeId = providerPaymentChargeId;
-        ticket.QrCode ??= "TUSA-" + Guid.NewGuid().ToString("N")[..8].ToUpperInvariant();
+        ticket.QrCode ??= "TUSA-" + Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
         _db.SaveChanges();
         return ticket;
     }

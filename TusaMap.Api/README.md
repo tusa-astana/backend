@@ -1,6 +1,6 @@
 # TusaMap API (.NET 10)
 
-Бэкенд для TusaMap: мероприятия, билеты, авторизация через Telegram initData.
+Бэкенд TUSA: каталог событий, модерация, RSVP, инструменты организатора и цифровой Organizer Pro через Telegram Stars. Офлайн-билетные модели сохранены как legacy; TUSA не продаёт билеты и не принимает оплату за вход.
 
 ## Запуск
 
@@ -65,34 +65,34 @@ dotnet run --project .\TusaMap.Api\TusaMap.Api.csproj
 - `GET /api/events/{id}` — мероприятие по id
 - `GET /api/events/{id}/going` — число отметок участия и состояние текущего пользователя
 - `POST /api/events/{id}/going` — переключить участие; требуется проверенный Telegram `initData`
-- `POST /api/events/{id}/ticket-categories` — добавить тариф билета владельцу события или admin
-- `POST /api/events/{id}/promo-codes` — добавить промокод владельцу события или admin
+- `GET /api/organizer/engagement` — агрегированные открытия, shares и RSVP по своим одобренным событиям; требуется проверенный Telegram `initData`, admin видит все одобренные non-demo события
+- `POST /api/events/{id}/ticket-categories` и `/promo-codes` — legacy endpoints отвечают `410 Gone`; TUSA не управляет ticket inventory
 - `POST /api/events` — отправить мероприятие на модерацию (заголовок `X-Telegram-Init-Data`)
 - `POST /api/events/public` — демо-форма заявки без Telegram-авторизации; заявка остаётся `pending`, публично не появляется и требует ручной проверки; ограничение — 5 заявок за 10 минут на API-видимый IP
 - `GET /api/events/pending` — список заявок для admin Telegram ID
 - `POST /api/events/{id}/approve` — одобрить событие для admin Telegram ID
 - `POST /api/events/{id}/reject` — отклонить ожидающую заявку для admin Telegram ID
 - `GET /api/events/{id}/going` и `POST /api/events/{id}/going` — счётчик участия и переключение RSVP для проверенного Telegram-пользователя
-- `GET /api/tickets/me` — мои билеты (заголовок `X-Telegram-Init-Data`)
-- `POST /api/tickets` и `/api/tickets/public` — отключены, чтобы не создавать неоплаченные заказы. Билет оформляется через Telegram invoice.
-- `POST /api/tickets/quote` — проверить цену, категорию, лимит и промокод до создания заказа
-- `POST /api/payments/webhook` — legacy endpoint отключён (410); event ticket payments подтверждаются только через проверенный Telegram `successful_payment` update.
-- `POST /api/telegram/webhook` — Telegram updates; `/terms` и `/paysupport` доступны пользователям. Офлайн-билет оплачивается invoice в KZT через стороннего Telegram provider token; Stars допускаются только для Organizer Pro.
-- `/start event_tusa-2026` — показывает условия и создаёт KZT invoice только после явного согласия, при настроенных цене и provider token.
-- `/start subscribe_pro` — opens the Organizer Pro subscription invoice when `Payments__TelegramSubscriptionStars` is configured
+- `GET /api/tickets/me` — ранее оформленные/legacy записи билетов пользователя (заголовок `X-Telegram-Init-Data`); новые офлайн-билеты TUSA не продаёт
+- `POST /api/tickets` и `/api/tickets/public` — отключены. TUSA не оформляет офлайн-билеты и не принимает оплату за вход.
+- `POST /api/tickets/quote` — legacy endpoint закрыт (410 Gone); TUSA не рассчитывает офлайн-билеты.
+- `POST /api/payments/webhook` — legacy endpoint отключён (410). Новые офлайн-продажи выключены; Stars `successful_payment` обрабатывается только для цифрового Organizer Pro.
+- `POST /api/telegram/webhook` — Telegram updates; `/terms` и `/paysupport` доступны пользователям. Новые продажи офлайн-билетов отключены. Organizer Pro — цифровая услуга, для неё используется только Telegram Stars (`XTR`).
+- `/start event_tusa-2026` — сообщает, что TUSA не продаёт офлайн-билеты и не принимает оплату за вход.
+- `/start subscribe_pro` — показывает условия и создаёт Stars invoice Organizer Pro, только если настроена цена `Payments__TelegramSubscriptionStars`.
 - `/organizerpro` — показать условия и приобрести/продлить Organizer Pro за Stars, если цена настроена.
 - `/refundstars <Telegram_ID>` — admin-only возврат последней Organizer Pro оплаты через Telegram Stars API.
 
 После отправки заявки администраторы получают Telegram-уведомление (если заданы bot token и `Telegram:AdminUserIds`). Очередь доступна в Mini App: `/admin/event-review`. Решения разрешены только аккаунтам из серверного allowlist; повторно обработать уже закрытую заявку нельзя.
 
-На карточке платного события без доступной оплаты кнопка «Сообщить, когда билеты появятся» открывает бота и записывает Telegram-пользователя в список уведомлений. После одобрения события или добавления доступного тарифа бот отправляет ему одну попытку уведомления; успешная отправка отмечается в базе. Это не резервирует билет и не гарантирует доставку, если пользователь заблокировал бота. RSVP («Буду участвовать») хранится отдельно от интереса/ожидания билетов и доступен только после проверки Telegram `initData`.
+Список интереса и RSVP — отдельные бесплатные действия; ни одно из них не является бронью или билетом. Уведомления о доступности офлайн-билетов отключены вместе с продажей.
 
 ### Граница доступа
 
 - `GET /api/events` и `GET /api/events/{id}` предназначены для публичного чтения каталога.
-- Личные билеты, создание события через `POST /api/events`, quote заказа и organizer/admin endpoints должны вызываться с raw `initData`; admin дополнительно проверяется по allowlist `Telegram:AdminUserIds`.
+- Legacy записи билетов, создание события через `POST /api/events`, organizer analytics и admin endpoints должны вызываться с raw `initData`; admin дополнительно проверяется по allowlist `Telegram:AdminUserIds`.
 - `POST /api/events/public` в этом демо оставлен открытым для прототипирования и **не проверяет личность автора**. Есть базовый лимит 5 заявок за 10 минут на API-видимый IP, но перед масштабным публичным запуском добавь captcha/антиспам либо закрой маршрут. За reverse proxy настрой доверенную передачу клиентского IP; не доверяй произвольному `X-Forwarded-For`. Не используй email/username из body как доказательство владельца.
-- `POST /api/tickets/public` и `/api/tickets` не создают ticket orders: заказ создаёт и резервирует только Telegram invoice flow после проверки условий.
+- Все новые ticket-order, quote, category и promo-code операции закрыты; legacy `telegram_provider` payments не принимаются как новые покупки.
 
 Для production CORS также следует сузить до конкретного frontend origin вместо разрешения произвольных origin.
 
@@ -101,13 +101,11 @@ dotnet run --project .\TusaMap.Api\TusaMap.Api.csproj
 - `ConnectionStrings__Default` — PostgreSQL connection string;
 - `Telegram__BotToken` — токен бота;
 - `Telegram__AdminUserIds__0` — Telegram ID администратора;
-- `Payments__TelegramSubscriptionStars` — fixed Telegram Stars price for 30 days of Organizer Pro (keep `0` until the price is decided);
-- `Payments__TelegramPhysicalProviderToken` — токен физического платёжного провайдера, подключённого в BotFather; хранить только в User Secrets или secret store.
-- `Events__Tusa2026__TicketPriceKzt` — базовая цена билета в тенге до комиссии TUSA 10%; `0` оставляет продажи выключенными.
-- `Events__Tusa2026__Capacity` — лимит мест (по умолчанию 100).
+- `Payments__OrganizerProEnabled` — keep `false` until the digital benefits and full support/refund flow are implemented and verified.
+- `Payments__TelegramSubscriptionStars` — Stars price for the 30-day digital Organizer Pro service; keep `0` until its benefits, terms, support, and refund cycle are approved and tested. Both this price and the feature flag must be enabled for checkout.
 - `Telegram__WebhookSecret` — secret used when registering the Telegram webhook;
 - `Cors__Origins__0` — разрешённый frontend origin.
 
-Telegram must offer a provider available to the merchant in Kazakhstan and able to process KZT. Keep the provider token in User Secrets, not appsettings or Git. Tickets are reserved for 15 minutes after invoice creation; an unfinished pre-checkout expires after 5 minutes. Payments arriving after expiry are flagged for support/manual refund through the provider portal. Organizer Pro is digital and keeps Stars checkout with prior terms consent and `/paysupport`.
+Telegram requires Stars for digital goods and services inside bots and Mini Apps. Stars must not be used for offline event admission; that is why TUSA's physical-ticket checkout remains disabled instead of being converted to Stars. Organizer Pro may use Stars only after prior terms consent and a verified `/paysupport`/refund process. See https://core.telegram.org/bots/payments-stars and https://core.telegram.org/bots/payments.
 
-For local setup, obtain a physical-goods provider token under BotFather → `/mybots` → bot → Bot Settings → Payments, then set `Payments:TelegramPhysicalProviderToken` and `Events:Tusa2026:TicketPriceKzt` in User Secrets and restart the API. First confirm that the selected provider is available for this merchant and KZT in Kazakhstan. Do not enable the event category until a test invoice/payment has been completed and cancellation/refund procedures are known.
+Do not configure a physical payment-provider token for this product. Offline ticket sales are hard-disabled in code. Keep `Payments:OrganizerProEnabled=false` and the Stars price at `0` until the digital Organizer Pro package and its complete Telegram test, support, and refund lifecycle have been verified; both settings are required to open checkout.

@@ -16,17 +16,15 @@ public class EventsController : ControllerBase
     private readonly IUserStore _users;
     private readonly TusaMapDbContext _db;
     private readonly ITelegramBotService _telegramBot;
-    private readonly IEventInterestNotifier _interestNotifier;
     private readonly IConfiguration _configuration;
 
-    public EventsController(IEventsStore store, ITelegramAuthService telegramAuth, IUserStore users, TusaMapDbContext db, ITelegramBotService telegramBot, IEventInterestNotifier interestNotifier, IConfiguration configuration)
+    public EventsController(IEventsStore store, ITelegramAuthService telegramAuth, IUserStore users, TusaMapDbContext db, ITelegramBotService telegramBot, IConfiguration configuration)
     {
         _store = store;
         _telegramAuth = telegramAuth;
         _users = users;
         _db = db;
         _telegramBot = telegramBot;
-        _interestNotifier = interestNotifier;
         _configuration = configuration;
     }
 
@@ -126,28 +124,13 @@ public class EventsController : ControllerBase
             ,OrganizerTelegramId = organizerTelegramId
         };
         var created = _store.Add(e);
-        if (req.TicketCategories.Count > 0)
-        {
-            _db.TicketCategories.AddRange(req.TicketCategories.Select(category => new TicketCategory
-            {
-                EventId = created.Id,
-                Name = category.Name,
-                Description = category.Description ?? "",
-                Price = category.Price,
-                Capacity = category.Capacity,
-            }));
-            await _db.SaveChangesAsync(cancellationToken);
-        }
         await _telegramBot.NotifyAdminsOfEventSubmissionAsync(created, cancellationToken);
         return CreatedAtAction(nameof(GetById), new { id = created.Id }, created);
     }
 
     private void SetTicketSalesAvailability(EventItem eventItem)
     {
-        eventItem.TicketSalesEnabled = !eventItem.IsDemo &&
-            eventItem.Id == Tusa2026EventSeeder.EventId &&
-            !string.IsNullOrWhiteSpace(_configuration["Payments:TelegramPhysicalProviderToken"]) &&
-            eventItem.TicketCategories.Any(category => category.IsActive && category.Capacity > category.Sold);
+        eventItem.TicketSalesEnabled = false;
     }
 
     [HttpGet("pending")]
@@ -167,7 +150,6 @@ public class EventsController : ControllerBase
         if (approved is not null)
         {
             await _telegramBot.NotifyOrganizerOfEventReviewAsync(approved, approved: true, cancellationToken);
-            await _interestNotifier.NotifyIfTicketsAvailableAsync(id, cancellationToken);
         }
         return approved is null ? NotFound() : Ok(approved);
     }
@@ -208,21 +190,11 @@ public class CreateEventRequest : IValidatableObject
     public string? OrganizerEmail { get; set; }
     [Phone, StringLength(30)]
     public string? OrganizerPhone { get; set; }
-    public List<CreateTicketCategoryRequest> TicketCategories { get; set; } = [];
-
     public IEnumerable<ValidationResult> Validate(ValidationContext validationContext)
     {
         if (string.IsNullOrWhiteSpace(OrganizerEmail) && string.IsNullOrWhiteSpace(OrganizerPhone))
             yield return new ValidationResult("Укажите email или телефон, чтобы TUSA могла связаться по заявке.", [nameof(OrganizerEmail), nameof(OrganizerPhone)]);
     }
-}
-
-public class CreateTicketCategoryRequest
-{
-    [Required, StringLength(80, MinimumLength = 2)] public string Name { get; set; } = "";
-    [Range(0, 100000000)] public decimal Price { get; set; }
-    [Range(1, 1000000)] public int Capacity { get; set; }
-    [StringLength(300)] public string? Description { get; set; }
 }
 
 public record EventGoingResponse(int GoingCount, bool UserGoing);

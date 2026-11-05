@@ -12,20 +12,16 @@ namespace TusaMap.Api.Controllers;
 public class TicketsController : ControllerBase
 {
     private readonly ITicketsStore _ticketsStore;
-    private readonly IEventsStore _eventsStore;
     private readonly ITelegramAuthService _telegramAuth;
     private readonly IUserStore _users;
-    private readonly ITicketPricingService _pricing;
     private readonly TusaMapDbContext _db;
     private readonly ITelegramBotService _telegramBot;
 
-    public TicketsController(ITicketsStore ticketsStore, IEventsStore eventsStore, ITelegramAuthService telegramAuth, IUserStore users, ITicketPricingService pricing, TusaMapDbContext db, ITelegramBotService telegramBot)
+    public TicketsController(ITicketsStore ticketsStore, ITelegramAuthService telegramAuth, IUserStore users, TusaMapDbContext db, ITelegramBotService telegramBot)
     {
         _ticketsStore = ticketsStore;
-        _eventsStore = eventsStore;
         _telegramAuth = telegramAuth;
         _users = users;
-        _pricing = pricing;
         _db = db;
         _telegramBot = telegramBot;
     }
@@ -78,23 +74,15 @@ public class TicketsController : ControllerBase
 
     private ActionResult<Ticket> CreateOrder(PurchaseTicketRequest request, long userId)
     {
-        if (_eventsStore.GetById(request.EventId) is null)
-            return NotFound("Event not found");
-        if (request.PaymentMethod != "telegram_provider")
-            return BadRequest("Выберите официальный Telegram-счёт; Telegram Stars и прямые Kaspi-заказы для офлайн-входа отключены.");
-        return StatusCode(StatusCodes.Status503ServiceUnavailable,
-            "Создание неоплаченного заказа через API отключено. Оформите билет через официальный Telegram-счёт события.");
+        return StatusCode(StatusCodes.Status410Gone,
+            "TUSA does not sell offline event admission or create ticket orders.");
     }
 
     [HttpPost("quote")]
-    public ActionResult<TicketQuoteResponse> Quote([FromBody] QuoteTicketRequest request, [FromHeader(Name = "X-Telegram-Init-Data")] string? initData)
+    public IActionResult Quote()
     {
-        var user = _telegramAuth.ValidateInitData(initData);
-        if (user is null) return Unauthorized("Invalid or missing Telegram initData");
-        _users.Upsert(user);
-        var draft = _pricing.Quote(request.EventId, request.TicketCategoryId, request.Quantity, request.PromoCode, user.Id, out var error);
-        if (draft is null) return BadRequest(error);
-        return Ok(new TicketQuoteResponse(draft.Category.Id, draft.Category.Name, draft.Quantity, draft.BaseAmount, draft.DiscountAmount, draft.CommissionAmount, draft.TotalAmount));
+        return StatusCode(StatusCodes.Status410Gone,
+            "TUSA does not quote or sell offline event tickets.");
     }
 
     [HttpPost("{id}/cancel")]
@@ -142,13 +130,4 @@ public class PurchaseTicketRequest
     public string PaymentMethod { get; set; } = "";
 }
 
-public class QuoteTicketRequest
-{
-    [Required] public string EventId { get; set; } = "";
-    [Required] public string TicketCategoryId { get; set; } = "";
-    [Range(1, 10)] public int Quantity { get; set; } = 1;
-    public string? PromoCode { get; set; }
-}
-
-public record TicketQuoteResponse(string TicketCategoryId, string TicketCategoryName, int Quantity, decimal BaseAmount, decimal DiscountAmount, decimal CommissionAmount, decimal TotalAmount);
 public record OrganizerOrderRow(string TicketId, string EventId, string EventTitle, string PaymentStatus, string PaymentMethod, int Quantity, decimal TotalAmount, string PurchasedAt);

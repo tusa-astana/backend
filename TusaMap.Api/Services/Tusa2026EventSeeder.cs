@@ -8,7 +8,6 @@ namespace TusaMap.Api.Services;
 public static class Tusa2026EventSeeder
 {
     public const string EventId = "tusa-2026";
-    public const string TicketCategoryId = "tusa-2026-ticket";
 
     public static void Ensure(TusaMapDbContext db, IConfiguration configuration)
     {
@@ -38,31 +37,13 @@ public static class Tusa2026EventSeeder
         ev.Lat = 51.1694;
         ev.Lng = 71.4494;
         ev.Category = "вечеринка";
-        var ticketPriceKzt = configuration.GetValue<decimal>("Events:Tusa2026:TicketPriceKzt");
-        var physicalProviderToken = configuration["Payments:TelegramPhysicalProviderToken"];
-        var canSellTickets = startAt > DateTimeOffset.UtcNow && ticketPriceKzt > 0 &&
-                             !string.IsNullOrWhiteSpace(physicalProviderToken);
-        ev.Price = canSellTickets
-            ? Math.Round(ticketPriceKzt * 1.10m, 2, MidpointRounding.AwayFromZero)
-            : null;
+        // Offline admission is outside TUSA's Stars-only product policy.
+        ev.Price = null;
         ev.ImageUrl = configuration["Events:Tusa2026:ImageUrl"] ?? "https://images.unsplash.com/photo-1470229722913-7c0e2dbbafd3?auto=format&fit=crop&w=1200&q=85";
         ev.OrganizerName = "TUSA";
         ev.OrganizerTelegramId = 0;
         ev.Status = "approved";
         ev.IsDemo = false;
-
-        var category = ev.TicketCategories.FirstOrDefault(x => x.Id == TicketCategoryId);
-        if (category is null)
-        {
-            category = new TicketCategory { Id = TicketCategoryId, EventId = EventId, Name = "Вход", Capacity = configuration.GetValue("Events:Tusa2026:Capacity", 100) };
-            db.TicketCategories.Add(category);
-        }
-        category.Price = Math.Max(0, ticketPriceKzt);
-        category.IsActive = canSellTickets;
-        category.Capacity = Math.Max(category.Capacity, category.Sold);
-        category.Description = canSellTickets
-            ? "Оплата в тенге через Telegram и подключённого платёжного провайдера. Итог включает комиссию TUSA 10%."
-            : "Продажи откроются после настройки платёжного провайдера и цены в тенге.";
 
         db.SaveChanges();
     }

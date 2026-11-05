@@ -16,4 +16,6 @@ public class TelegramUser
     public string? LanguageCode { get; set; }
     [JsonPropertyName("photo_url")]
     public string? PhotoUrl { get; set; }
+    [JsonPropertyName("is_bot")]
+    public bool IsBot { get; set; }
 }

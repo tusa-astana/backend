@@ -17,6 +17,11 @@ public class TusaMapDbContext : DbContext
     public DbSet<FunnelEvent> FunnelEvents => Set<FunnelEvent>();
     public DbSet<EventInterest> EventInterests => Set<EventInterest>();
     public DbSet<EventParticipation> EventParticipations => Set<EventParticipation>();
+    public DbSet<MeetupAttendance> MeetupAttendances => Set<MeetupAttendance>();
+    public DbSet<InterestGroupMembership> InterestGroupMemberships => Set<InterestGroupMembership>();
+    public DbSet<InterestUserReport> InterestUserReports => Set<InterestUserReport>();
+    public DbSet<InterestGathering> InterestGatherings => Set<InterestGathering>();
+    public DbSet<InterestGatheringAttendance> InterestGatheringAttendances => Set<InterestGatheringAttendance>();
     public DbSet<TicketCheckIn> TicketCheckIns => Set<TicketCheckIn>();
     public DbSet<BotMessageLog> BotMessageLogs => Set<BotMessageLog>();
 
@@ -43,6 +48,17 @@ public class TusaMapDbContext : DbContext
         modelBuilder.Entity<EventInterest>().HasKey(x => new { x.EventId, x.TelegramUserId });
         modelBuilder.Entity<EventInterest>().HasIndex(x => new { x.EventId, x.TicketAvailabilityNotifiedAt });
         modelBuilder.Entity<EventParticipation>().HasKey(x => new { x.EventId, x.TelegramUserId });
+        modelBuilder.Entity<MeetupAttendance>().HasKey(x => new { x.VenueId, x.MeetupDate, x.TelegramUserId });
+        modelBuilder.Entity<MeetupAttendance>().HasIndex(x => new { x.MeetupDate, x.VenueId });
+        modelBuilder.Entity<InterestGroupMembership>().HasKey(x => new { x.InterestId, x.TelegramUserId });
+        modelBuilder.Entity<InterestGroupMembership>().HasIndex(x => x.TelegramUserId);
+        modelBuilder.Entity<InterestUserReport>().HasKey(x => x.Id);
+        modelBuilder.Entity<InterestUserReport>().HasIndex(x => new { x.InterestId, x.ReporterTelegramUserId, x.TargetTelegramUserId }).IsUnique();
+        modelBuilder.Entity<InterestUserReport>().HasIndex(x => x.Status);
+        modelBuilder.Entity<InterestGathering>().HasKey(x => x.Id);
+        modelBuilder.Entity<InterestGathering>().HasIndex(x => new { x.InterestId, x.MeetupDate, x.IsCancelled });
+        modelBuilder.Entity<InterestGatheringAttendance>().HasKey(x => new { x.GatheringId, x.TelegramUserId });
+        modelBuilder.Entity<InterestGatheringAttendance>().HasIndex(x => x.TelegramUserId);
         modelBuilder.Entity<TicketCheckIn>().HasKey(x => x.Id);
         modelBuilder.Entity<TicketCheckIn>().HasIndex(x => x.TicketId).IsUnique();
         modelBuilder.Entity<Ticket>().HasOne(x => x.CheckIn).WithOne().HasForeignKey<TicketCheckIn>(x => x.TicketId);

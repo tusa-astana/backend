@@ -36,7 +36,19 @@ public class CheckInController : ControllerBase
         if (ticket.CheckIn is not null) return Conflict(new { message = "Билет уже использован", checkedAt = ticket.CheckIn.CheckedAt });
 
         ticket.CheckIn = new Models.TicketCheckIn { TicketId = ticket.Id, CheckedByTelegramUserId = user.Id };
-        _db.SaveChanges();
+        try
+        {
+            _db.SaveChanges();
+        }
+        catch (DbUpdateException)
+        {
+            _db.ChangeTracker.Clear();
+            var existingCheckIn = _db.TicketCheckIns.AsNoTracking().FirstOrDefault(x => x.TicketId == ticket.Id);
+            if (existingCheckIn is null) throw;
+
+            return Conflict(new { message = "Билет уже использован", checkedAt = existingCheckIn.CheckedAt });
+        }
+
         return Ok(new { ticket.Id, ticket.EventTitle, ticket.TicketCategoryName, ticket.Quantity, checkedAt = ticket.CheckIn.CheckedAt });
     }
 }

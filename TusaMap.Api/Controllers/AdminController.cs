@@ -12,12 +12,14 @@ public class AdminController : ControllerBase
     private readonly TusaMapDbContext _db;
     private readonly ITelegramAuthService _auth;
     private readonly IUserStore _users;
+    private readonly IInterestGroupCatalog _interests;
 
-    public AdminController(TusaMapDbContext db, ITelegramAuthService auth, IUserStore users)
+    public AdminController(TusaMapDbContext db, ITelegramAuthService auth, IUserStore users, IInterestGroupCatalog interests)
     {
         _db = db;
         _auth = auth;
         _users = users;
+        _interests = interests;
     }
 
     [HttpPost("users/{telegramUserId:long}/role")]
@@ -60,6 +62,50 @@ public class AdminController : ControllerBase
                 x.MessageType, x.Content, x.ReceivedAt))
             .ToList();
         return Ok(messages);
+    }
+
+    [HttpGet("interest-reports")]
+    public async Task<IActionResult> InterestReports([FromHeader(Name = "X-Telegram-Init-Data")] string? initData, CancellationToken cancellationToken)
+    {
+        var admin = _auth.ValidateInitData(initData);
+        if (admin is null || !_users.IsAdmin(admin.Id)) return StatusCode(StatusCodes.Status403Forbidden);
+        var reports = await (from report in _db.InterestUserReports.AsNoTracking()
+                             join reporter in _db.Users.AsNoTracking() on report.ReporterTelegramUserId equals reporter.TelegramUserId
+                             join target in _db.Users.AsNoTracking() on report.TargetTelegramUserId equals target.TelegramUserId
+                             where report.Status == "pending"
+                             orderby report.CreatedAt
+                             select new InterestReportRow(
+                                 report.Id, report.InterestId, report.Reason, report.Details, report.CreatedAt,
+                                 reporter.TelegramUserId, reporter.FirstName, reporter.Username,
+                                 target.TelegramUserId, target.FirstName, target.Username, target.IsSuspended))
+            .ToListAsync(cancellationToken);
+        return Ok(reports.Select(report => report with { InterestName = _interests.Find(report.InterestId)?.Name ?? report.InterestId }));
+    }
+
+    [HttpPost("interest-reports/{reportId}/review")]
+    public async Task<IActionResult> ReviewInterestReport(string reportId, [FromBody] ReviewInterestReportRequest request,
+        [FromHeader(Name = "X-Telegram-Init-Data")] string? initData, CancellationToken cancellationToken)
+    {
+        var admin = _auth.ValidateInitData(initData);
+        if (admin is null || !_users.IsAdmin(admin.Id)) return StatusCode(StatusCodes.Status403Forbidden);
+        if (request.Action is not ("dismiss" or "suspend")) return BadRequest("Action must be dismiss or suspend.");
+        var report = await _db.InterestUserReports.FirstOrDefaultAsync(item => item.Id == reportId && item.Status == "pending", cancellationToken);
+        if (report is null) return NotFound();
+        if (request.Action == "suspend")
+        {
+            var target = await _db.Users.FirstOrDefaultAsync(user => user.TelegramUserId == report.TargetTelegramUserId, cancellationToken);
+            if (target is null) return NotFound("Участник не найден.");
+            target.IsSuspended = true;
+            target.SuspendedAt = DateTime.UtcNow;
+            var memberships = await _db.InterestGroupMemberships.Where(item => item.TelegramUserId == target.TelegramUserId).ToListAsync(cancellationToken);
+            _db.InterestGroupMemberships.RemoveRange(memberships);
+        }
+        report.Status = "reviewed";
+        report.ReviewAction = request.Action;
+        report.ReviewedAt = DateTime.UtcNow;
+        report.ReviewedByTelegramUserId = admin.Id;
+        await _db.SaveChangesAsync(cancellationToken);
+        return NoContent();
     }
 
     [HttpGet("tickets/by-event")]
@@ -122,3 +168,8 @@ public class AdminController : ControllerBase
 public record SetRoleRequest(string Role);
 public record SetSubscriptionRequest(string Plan, string Status, DateTime? ExpiresAt);
 public record BotMessageLogRow(long Id, long TelegramUserId, string SenderName, string? Username, string MessageType, string Content, DateTime ReceivedAt);
+public record ReviewInterestReportRequest(string Action);
+public record InterestReportRow(string Id, string InterestId, string Reason, string Details, DateTime CreatedAt,
+    long ReporterTelegramUserId, string ReporterName, string? ReporterUsername,
+    long TargetTelegramUserId, string TargetName, string? TargetUsername, bool TargetSuspended,
+    string InterestName = "");

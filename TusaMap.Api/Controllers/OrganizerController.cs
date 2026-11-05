@@ -26,13 +26,61 @@ public class OrganizerController : ControllerBase
     public IActionResult SubscriptionOffer()
     {
         var stars = _configuration.GetValue<int>("Payments:TelegramSubscriptionStars");
+        var enabled = _configuration.GetValue("Payments:OrganizerProEnabled", false);
         return Ok(new
         {
-            available = stars > 0,
+            available = enabled && stars > 0,
             stars = Math.Max(0, stars),
             durationDays = 30,
-            features = new[] { "Заказы по вашим событиям", "Статистика просмотров и продаж", "Инструменты организатора" }
+            features = new[] { "Цифровые инструменты организатора внутри TUSA" }
         });
+    }
+
+    [HttpGet("engagement")]
+    public async Task<ActionResult<IReadOnlyList<OrganizerEngagementRow>>> Engagement(
+        [FromHeader(Name = "X-Telegram-Init-Data")] string? initData,
+        CancellationToken cancellationToken)
+    {
+        var user = _auth.ValidateInitData(initData);
+        if (user is null) return Unauthorized();
+
+        var isAdmin = _users.IsAdmin(user.Id);
+        var eventsQuery = _db.Events.AsNoTracking()
+            .Where(item => item.Status == "approved" && !item.IsDemo);
+        if (!isAdmin)
+            eventsQuery = eventsQuery.Where(item => item.OrganizerTelegramId == user.Id);
+
+        var events = await eventsQuery
+            .OrderBy(item => item.Date)
+            .ThenBy(item => item.Title)
+            .Select(item => new { item.Id, item.Title, item.Date })
+            .ToListAsync(cancellationToken);
+        if (events.Count == 0) return Ok(Array.Empty<OrganizerEngagementRow>());
+
+        var eventIds = events.Select(item => item.Id).ToArray();
+        var views = await _db.FunnelEvents.AsNoTracking()
+            .Where(item => item.Name == "event_open" && item.EventId != null && eventIds.Contains(item.EventId))
+            .GroupBy(item => item.EventId!)
+            .Select(group => new { EventId = group.Key, Count = group.LongCount() })
+            .ToDictionaryAsync(item => item.EventId, item => item.Count, cancellationToken);
+        var shares = await _db.FunnelEvents.AsNoTracking()
+            .Where(item => item.Name == "event_share" && item.EventId != null && eventIds.Contains(item.EventId))
+            .GroupBy(item => item.EventId!)
+            .Select(group => new { EventId = group.Key, Count = group.LongCount() })
+            .ToDictionaryAsync(item => item.EventId, item => item.Count, cancellationToken);
+        var rsvps = await _db.EventParticipations.AsNoTracking()
+            .Where(item => eventIds.Contains(item.EventId))
+            .GroupBy(item => item.EventId)
+            .Select(group => new { EventId = group.Key, Count = group.LongCount() })
+            .ToDictionaryAsync(item => item.EventId, item => item.Count, cancellationToken);
+
+        return Ok(events.Select(item => new OrganizerEngagementRow(
+            item.Id,
+            item.Title,
+            item.Date,
+            views.GetValueOrDefault(item.Id),
+            shares.GetValueOrDefault(item.Id),
+            rsvps.GetValueOrDefault(item.Id))).ToArray());
     }
 
     [HttpGet("subscription")]
@@ -52,3 +100,5 @@ public class OrganizerController : ControllerBase
         });
     }
 }
+
+public sealed record OrganizerEngagementRow(string EventId, string EventTitle, string EventDate, long Views, long Shares, long Rsvps);

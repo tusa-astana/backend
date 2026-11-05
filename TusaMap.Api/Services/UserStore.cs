@@ -34,6 +34,9 @@ public class UserStore : IUserStore
         existing.FirstName = user.FirstName;
         existing.LastName = user.LastName;
         existing.Username = user.Username;
+        existing.PhotoUrl = Uri.TryCreate(user.PhotoUrl, UriKind.Absolute, out var photoUri) && photoUri.Scheme == Uri.UriSchemeHttps
+            ? user.PhotoUrl
+            : null;
         existing.LastSeenAt = DateTime.UtcNow;
         if (_adminIds.Contains(user.Id)) existing.Role = "admin";
         _db.SaveChanges();

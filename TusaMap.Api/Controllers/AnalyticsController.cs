@@ -1,4 +1,5 @@
 using System.ComponentModel.DataAnnotations;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using TusaMap.Api.Data;
@@ -10,7 +11,7 @@ namespace TusaMap.Api.Controllers;
 [Route("api/analytics")]
 public class AnalyticsController : ControllerBase
 {
-    private static readonly string[] AllowedEvents = ["catalog_view", "event_open", "checkout_view", "payment_start", "purchase_success", "event_share", "organizer_lead"];
+    private static readonly string[] AllowedEvents = ["catalog_view", "event_open", "event_share"];
     private readonly TusaMapDbContext _db;
     private readonly ITelegramAuthService _auth;
     private readonly IUserStore _users;
@@ -23,9 +24,21 @@ public class AnalyticsController : ControllerBase
     }
 
     [HttpPost]
+    [EnableRateLimiting("analytics")]
     public IActionResult Track([FromBody] TrackEventRequest request, [FromHeader(Name = "X-Telegram-Init-Data")] string? initData)
     {
         if (!AllowedEvents.Contains(request.Name, StringComparer.Ordinal)) return BadRequest("Unknown analytics event");
+        if (request.Name == "catalog_view" && request.EventId is not null)
+            return BadRequest("Catalog views cannot target an event");
+
+        if (request.Name is "event_open" or "event_share")
+        {
+            if (string.IsNullOrWhiteSpace(request.EventId)) return BadRequest("EventId is required");
+            var eventExists = _db.Events.AsNoTracking().Any(item =>
+                item.Id == request.EventId && item.Status == "approved" && !item.IsDemo);
+            if (!eventExists) return NotFound();
+        }
+
         var user = _auth.ValidateInitData(initData);
         _db.FunnelEvents.Add(new Models.FunnelEvent { Name = request.Name, EventId = request.EventId, Ref = request.Ref, TelegramUserId = user?.Id });
         _db.SaveChanges();
