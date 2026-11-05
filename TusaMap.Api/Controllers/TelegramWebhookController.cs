@@ -209,15 +209,12 @@ public class TelegramWebhookController : ControllerBase
         var appUrl = (_configuration["Telegram:WebAppUrl"] ?? "https://yessken.github.io").TrimEnd('/');
         var imageUrl = _configuration["Telegram:WelcomeImageUrl"];
         if (string.IsNullOrWhiteSpace(imageUrl)) imageUrl = $"{appUrl}/tusa-avatar.svg";
-        var termsUrl = _configuration["Telegram:TermsUrl"];
-        if (string.IsNullOrWhiteSpace(termsUrl)) termsUrl = $"{appUrl}/terms.html";
-        var caption = "Привет! Это TUSA — места и встречи в Астане. Открой приложение, чтобы выбрать место и присоединиться к планам других.";
+        var caption = "Привет! Это TUSA — афиша событий и мест Астаны.";
         var replyMarkup = new
         {
             inline_keyboard = new object[][]
             {
                 [new { text = "Открыть афишу TUSA", web_app = new { url = $"{appUrl}/events" } }],
-                [new { text = "Условия и помощь", url = termsUrl }],
             }
         };
 
