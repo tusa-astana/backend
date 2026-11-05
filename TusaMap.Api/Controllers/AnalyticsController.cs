@@ -51,6 +51,19 @@ public class AnalyticsController : ControllerBase
         return NoContent();
     }
 
+    [HttpPost("beacon")]
+    [EnableRateLimiting("analytics")]
+    public IActionResult TrackCommunityBeacon([FromForm] TrackCommunityBeaconRequest request)
+    {
+        if (string.IsNullOrWhiteSpace(request.Ref) ||
+            !AllowedCommunityRefs.Contains(request.Ref, StringComparer.Ordinal))
+            return BadRequest("Unknown community reference");
+
+        _db.FunnelEvents.Add(new Models.FunnelEvent { Name = "community_open", Ref = request.Ref });
+        _db.SaveChanges();
+        return NoContent();
+    }
+
     [HttpGet("summary")]
     public IActionResult Summary([FromHeader(Name = "X-Telegram-Init-Data")] string? initData)
     {
@@ -66,4 +79,9 @@ public class TrackEventRequest
     [Required, StringLength(40)] public string Name { get; set; } = "";
     [StringLength(80)] public string? EventId { get; set; }
     [StringLength(120)] public string? Ref { get; set; }
+}
+
+public class TrackCommunityBeaconRequest
+{
+    [Required, StringLength(120)] public string Ref { get; set; } = "";
 }
