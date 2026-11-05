@@ -187,6 +187,6 @@ public sealed class SetMeetupAttendanceRequest
 {
     public string Date { get; set; } = "";
     public string ArrivalTime { get; set; } = "";
-    public bool IsAnonymous { get; set; }
+    public bool IsAnonymous { get; set; } = true;
     public bool OpenToMeet { get; set; }
 }

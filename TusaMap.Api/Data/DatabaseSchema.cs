@@ -62,7 +62,7 @@ public static class DatabaseSchema
         CreateTable(db, "MeetupAttendances", """
             CREATE TABLE IF NOT EXISTS MeetupAttendances (
                 VenueId TEXT NOT NULL, MeetupDate TEXT NOT NULL, TelegramUserId INTEGER NOT NULL,
-                ArrivalTime TEXT NOT NULL DEFAULT '', IsAnonymous INTEGER NOT NULL DEFAULT 0,
+                ArrivalTime TEXT NOT NULL DEFAULT '', IsAnonymous INTEGER NOT NULL DEFAULT 1,
                 OpenToMeet INTEGER NOT NULL DEFAULT 0, UpdatedAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 PRIMARY KEY (VenueId, MeetupDate, TelegramUserId)
             )
@@ -222,7 +222,7 @@ public static class DatabaseSchema
         db.Database.ExecuteSqlRaw("CREATE INDEX IF NOT EXISTS \"IX_EventInterests_EventId_TicketAvailabilityNotifiedAt\" ON \"EventInterests\" (\"EventId\", \"TicketAvailabilityNotifiedAt\")");
         db.Database.ExecuteSqlRaw("CREATE TABLE IF NOT EXISTS \"EventParticipations\" (\"EventId\" TEXT NOT NULL, \"TelegramUserId\" BIGINT NOT NULL, \"CreatedAt\" TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY (\"EventId\", \"TelegramUserId\"))");
         db.Database.ExecuteSqlRaw("CREATE INDEX IF NOT EXISTS \"IX_EventParticipations_EventId\" ON \"EventParticipations\" (\"EventId\")");
-        db.Database.ExecuteSqlRaw("CREATE TABLE IF NOT EXISTS \"MeetupAttendances\" (\"VenueId\" TEXT NOT NULL, \"MeetupDate\" TEXT NOT NULL, \"TelegramUserId\" BIGINT NOT NULL, \"ArrivalTime\" TEXT NOT NULL DEFAULT '', \"IsAnonymous\" BOOLEAN NOT NULL DEFAULT FALSE, \"OpenToMeet\" BOOLEAN NOT NULL DEFAULT FALSE, \"UpdatedAt\" TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY (\"VenueId\", \"MeetupDate\", \"TelegramUserId\"))");
+        db.Database.ExecuteSqlRaw("CREATE TABLE IF NOT EXISTS \"MeetupAttendances\" (\"VenueId\" TEXT NOT NULL, \"MeetupDate\" TEXT NOT NULL, \"TelegramUserId\" BIGINT NOT NULL, \"ArrivalTime\" TEXT NOT NULL DEFAULT '', \"IsAnonymous\" BOOLEAN NOT NULL DEFAULT TRUE, \"OpenToMeet\" BOOLEAN NOT NULL DEFAULT FALSE, \"UpdatedAt\" TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY (\"VenueId\", \"MeetupDate\", \"TelegramUserId\"))");
         db.Database.ExecuteSqlRaw("CREATE INDEX IF NOT EXISTS \"IX_MeetupAttendances_MeetupDate_VenueId\" ON \"MeetupAttendances\" (\"MeetupDate\", \"VenueId\")");
         db.Database.ExecuteSqlRaw("CREATE TABLE IF NOT EXISTS \"InterestGroupMemberships\" (\"InterestId\" TEXT NOT NULL, \"TelegramUserId\" BIGINT NOT NULL, \"IsAnonymous\" BOOLEAN NOT NULL DEFAULT TRUE, \"OpenToMeet\" BOOLEAN NOT NULL DEFAULT FALSE, \"JoinedAt\" TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY (\"InterestId\", \"TelegramUserId\"))");
         db.Database.ExecuteSqlRaw("CREATE INDEX IF NOT EXISTS \"IX_InterestGroupMemberships_TelegramUserId\" ON \"InterestGroupMemberships\" (\"TelegramUserId\")");
