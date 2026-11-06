@@ -11,17 +11,21 @@ namespace TusaMap.Api.Controllers;
 [Route("api/analytics")]
 public class AnalyticsController : ControllerBase
 {
-    private static readonly string[] AllowedEvents = ["catalog_view", "event_open", "event_share", "community_open"];
+    private static readonly string[] AllowedEvents = [
+        "catalog_view", "event_open", "event_share", "community_open", "meetup_share_intent", "meetup_invite_open",
+    ];
     private static readonly string[] AllowedCommunityRefs = ["rollmove-astana"];
     private readonly TusaMapDbContext _db;
     private readonly ITelegramAuthService _auth;
     private readonly IUserStore _users;
+    private readonly IMeetupVenueCatalog _venues;
 
-    public AnalyticsController(TusaMapDbContext db, ITelegramAuthService auth, IUserStore users)
+    public AnalyticsController(TusaMapDbContext db, ITelegramAuthService auth, IUserStore users, IMeetupVenueCatalog venues)
     {
         _db = db;
         _auth = auth;
         _users = users;
+        _venues = venues;
     }
 
     [HttpPost]
@@ -36,6 +40,11 @@ public class AnalyticsController : ControllerBase
             (request.EventId is not null || string.IsNullOrWhiteSpace(request.Ref) ||
              !AllowedCommunityRefs.Contains(request.Ref, StringComparer.Ordinal)))
             return BadRequest("Community opens require a known community reference");
+
+        if (request.Name is "meetup_share_intent" or "meetup_invite_open" &&
+            (request.EventId is not null || string.IsNullOrWhiteSpace(request.Ref) ||
+             !_venues.GetVenues().Any(venue => string.Equals(venue.Id, request.Ref, StringComparison.Ordinal))))
+            return BadRequest("Meetup analytics require a known venue reference");
 
         if (request.Name is "event_open" or "event_share")
         {
