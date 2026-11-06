@@ -167,6 +167,12 @@ public sealed class InterestsController(
                 GatheringId = gatheringId,
                 TelegramUserId = identity.Id,
             });
+            db.FunnelEvents.Add(new FunnelEvent
+            {
+                Name = "community_gathering_rsvp",
+                Ref = $"gathering:{gatheringId}",
+                TelegramUserId = null,
+            });
             await db.SaveChangesAsync(cancellationToken);
         }
         return NoContent();

@@ -13,7 +13,7 @@ public class AnalyticsController : ControllerBase
 {
     private static readonly string[] AllowedEvents = [
         "catalog_view", "event_open", "event_share", "community_open", "meetup_share_intent", "meetup_invite_open",
-        "community_gathering_share", "community_gathering_open",
+        "community_gathering_share", "community_gathering_open", "community_gathering_rsvp",
     ];
     private static readonly string[] AllowedCommunityRefs = ["rollmove-astana"];
     private static readonly string[] AllowedMeetupCampaigns = ["host-a", "host-b", "host-c"];
@@ -35,6 +35,8 @@ public class AnalyticsController : ControllerBase
     public IActionResult Track([FromBody] TrackEventRequest request, [FromHeader(Name = "X-Telegram-Init-Data")] string? initData)
     {
         if (!AllowedEvents.Contains(request.Name, StringComparer.Ordinal)) return BadRequest("Unknown analytics event");
+        if (request.Name == "community_gathering_rsvp")
+            return BadRequest("Community gathering RSVPs are recorded server-side");
         if (request.Name == "catalog_view" && request.EventId is not null)
             return BadRequest("Catalog views cannot target an event");
 
