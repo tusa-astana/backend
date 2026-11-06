@@ -18,6 +18,12 @@ public sealed class MeetupsController(
 {
     private static readonly string[] DateFormats = ["yyyy-MM-dd"];
 
+    [HttpGet("venues")]
+    public ActionResult<IReadOnlyList<MeetupVenueOptionResponse>> GetVenueOptions()
+        => Ok(venueCatalog.GetVenues()
+            .Select(venue => new MeetupVenueOptionResponse(venue.Id, venue.Name))
+            .ToArray());
+
     [HttpGet]
     public async Task<ActionResult<MeetupCatalogResponse>> Get([FromQuery] string? date, CancellationToken cancellationToken)
     {
@@ -151,6 +157,8 @@ public sealed class MeetupsController(
 }
 
 public sealed record MeetupCatalogResponse(string Date, DateTime SourceUpdatedAtUtc, string DataSource, IReadOnlyList<MeetupPlanResponse> Venues);
+
+public sealed record MeetupVenueOptionResponse(string Id, string Name);
 
 public sealed record MeetupPlanResponse(
     string Id,
