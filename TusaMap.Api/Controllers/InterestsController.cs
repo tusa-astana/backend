@@ -21,6 +21,35 @@ public sealed class InterestsController(
         "spam", "harassment", "impersonation", "unsafe", "other",
     };
 
+    [HttpGet("gatherings/upcoming")]
+    public async Task<ActionResult<IReadOnlyList<UpcomingInterestGatheringResponse>>> GetUpcomingGatherings(CancellationToken cancellationToken)
+    {
+        var today = DateOnly.FromDateTime(DateTime.UtcNow.AddHours(5)).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+        var gatherings = await db.InterestGatherings.AsNoTracking()
+            .Where(item => !item.IsCancelled && item.MeetupDate.CompareTo(today) >= 0)
+            .OrderBy(item => item.MeetupDate)
+            .ThenBy(item => item.StartTime)
+            .Take(6)
+            .ToListAsync(cancellationToken);
+
+        var groups = catalog.GetGroups().ToDictionary(group => group.Id, StringComparer.Ordinal);
+        gatherings = gatherings.Where(item => groups.ContainsKey(item.InterestId)).ToList();
+        var gatheringIds = gatherings.Select(item => item.Id).ToArray();
+        var attendanceCounts = await db.InterestGatheringAttendances.AsNoTracking()
+            .Where(item => gatheringIds.Contains(item.GatheringId))
+            .GroupBy(item => item.GatheringId)
+            .Select(group => new { GatheringId = group.Key, Count = group.Count() })
+            .ToDictionaryAsync(item => item.GatheringId, item => item.Count, cancellationToken);
+
+        return Ok(gatherings.Select(item =>
+        {
+            var group = groups[item.InterestId];
+            return new UpcomingInterestGatheringResponse(
+                item.Id, item.InterestId, group.Name, group.Emoji, item.Title, item.MeetupDate,
+                item.StartTime, item.Place, item.Details, attendanceCounts.GetValueOrDefault(item.Id));
+        }).ToArray());
+    }
+
     [HttpGet]
     public async Task<ActionResult<IReadOnlyList<InterestGroupResponse>>> Get(CancellationToken cancellationToken)
     {
@@ -287,6 +316,8 @@ public sealed record InterestGroupResponse(string Id, string Name, string Descri
     IReadOnlyList<InterestGatheringResponse> Gatherings);
 public sealed record InterestGatheringResponse(string Id, string InterestId, long HostTelegramUserId, string Title, string Date,
     string Time, string Place, string Details, int GoingCount, bool UserGoing, bool IsHost);
+public sealed record UpcomingInterestGatheringResponse(string Id, string InterestId, string InterestName, string InterestEmoji,
+    string Title, string Date, string Time, string Place, string Details, int GoingCount);
 public sealed record InterestMemberResponse(long? TelegramUserId, string Name, string? PhotoUrl, string? Username, bool Anonymous, bool OpenToMeet, bool IsYou);
 public sealed record SetInterestMembershipRequest(bool IsAnonymous = true, bool OpenToMeet = false);
 public sealed record CreateInterestReportRequest(long TargetTelegramUserId, string Reason, string? Details);
