@@ -15,6 +15,7 @@ public class AnalyticsController : ControllerBase
         "catalog_view", "event_open", "event_share", "community_open", "meetup_share_intent", "meetup_invite_open",
     ];
     private static readonly string[] AllowedCommunityRefs = ["rollmove-astana"];
+    private static readonly string[] AllowedMeetupCampaigns = ["host-a", "host-b", "host-c"];
     private readonly TusaMapDbContext _db;
     private readonly ITelegramAuthService _auth;
     private readonly IUserStore _users;
@@ -43,8 +44,8 @@ public class AnalyticsController : ControllerBase
 
         if (request.Name is "meetup_share_intent" or "meetup_invite_open" &&
             (request.EventId is not null || string.IsNullOrWhiteSpace(request.Ref) ||
-             !_venues.GetVenues().Any(venue => string.Equals(venue.Id, request.Ref, StringComparison.Ordinal))))
-            return BadRequest("Meetup analytics require a known venue reference");
+             !TryParseMeetupRef(request.Ref, out _, out _)))
+            return BadRequest("Meetup analytics require a known venue and optional allowlisted campaign reference");
 
         if (request.Name is "event_open" or "event_share")
         {
@@ -80,6 +81,56 @@ public class AnalyticsController : ControllerBase
         if (user is null || !_users.IsAdmin(user.Id)) return StatusCode(StatusCodes.Status403Forbidden);
         var summary = _db.FunnelEvents.AsNoTracking().GroupBy(x => x.Name).Select(group => new { name = group.Key, count = group.Count() }).ToList();
         return Ok(summary);
+    }
+
+    [HttpGet("summary/meetup-campaigns")]
+    public IActionResult MeetupCampaignSummary([FromHeader(Name = "X-Telegram-Init-Data")] string? initData)
+    {
+        var user = _auth.ValidateInitData(initData);
+        if (user is null || !_users.IsAdmin(user.Id)) return StatusCode(StatusCodes.Status403Forbidden);
+
+        var events = _db.FunnelEvents.AsNoTracking()
+            .Where(item => (item.Name == "meetup_share_intent" || item.Name == "meetup_invite_open") &&
+                           item.Ref != null && item.Ref.Contains("|c:"))
+            .Select(item => new { item.Name, item.Ref })
+            .ToList();
+
+        var summary = events
+            .Select(item => TryParseMeetupRef(item.Ref, out var venueId, out var campaign)
+                ? new { item.Name, VenueId = venueId, Campaign = campaign }
+                : null)
+            .Where(item => item is not null)
+            .GroupBy(item => new { item!.Name, item.VenueId, item.Campaign })
+            .Select(group => new { name = group.Key.Name, venueId = group.Key.VenueId, campaign = group.Key.Campaign, count = group.Count() })
+            .OrderBy(item => item.campaign)
+            .ThenBy(item => item.venueId)
+            .ThenBy(item => item.name)
+            .ToList();
+
+        return Ok(summary);
+    }
+
+    private bool TryParseMeetupRef(string? value, out string venueId, out string? campaign)
+    {
+        venueId = "";
+        campaign = null;
+        if (string.IsNullOrWhiteSpace(value)) return false;
+
+        var campaignMarker = value.IndexOf("|c:", StringComparison.Ordinal);
+        if (campaignMarker < 0)
+        {
+            venueId = value;
+        }
+        else
+        {
+            if (value.IndexOf("|c:", campaignMarker + 3, StringComparison.Ordinal) >= 0) return false;
+            venueId = value[..campaignMarker];
+            campaign = value[(campaignMarker + 3)..];
+            if (!AllowedMeetupCampaigns.Contains(campaign, StringComparer.Ordinal)) return false;
+        }
+
+        var parsedVenueId = venueId;
+        return _venues.GetVenues().Any(venue => string.Equals(venue.Id, parsedVenueId, StringComparison.Ordinal));
     }
 }
 
