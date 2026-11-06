@@ -13,6 +13,7 @@ public class AnalyticsController : ControllerBase
 {
     private static readonly string[] AllowedEvents = [
         "catalog_view", "event_open", "event_share", "community_open", "meetup_share_intent", "meetup_invite_open",
+        "community_gathering_share", "community_gathering_open",
     ];
     private static readonly string[] AllowedCommunityRefs = ["rollmove-astana"];
     private static readonly string[] AllowedMeetupCampaigns = ["host-a", "host-b", "host-c"];
@@ -47,6 +48,11 @@ public class AnalyticsController : ControllerBase
              !TryParseMeetupRef(request.Ref, out _, out _)))
             return BadRequest("Meetup analytics require a known venue and optional allowlisted campaign reference");
 
+        var isCommunityGatheringEvent = request.Name is "community_gathering_share" or "community_gathering_open";
+        if (isCommunityGatheringEvent &&
+            (request.EventId is not null || string.IsNullOrWhiteSpace(request.Ref) || !IsActiveGatheringRef(request.Ref)))
+            return BadRequest("Community gathering analytics require an active gathering reference");
+
         if (request.Name is "event_open" or "event_share")
         {
             if (string.IsNullOrWhiteSpace(request.EventId)) return BadRequest("EventId is required");
@@ -56,7 +62,13 @@ public class AnalyticsController : ControllerBase
         }
 
         var user = _auth.ValidateInitData(initData);
-        _db.FunnelEvents.Add(new Models.FunnelEvent { Name = request.Name, EventId = request.EventId, Ref = request.Ref, TelegramUserId = user?.Id });
+        _db.FunnelEvents.Add(new Models.FunnelEvent
+        {
+            Name = request.Name,
+            EventId = request.EventId,
+            Ref = request.Ref,
+            TelegramUserId = isCommunityGatheringEvent ? null : user?.Id,
+        });
         _db.SaveChanges();
         return NoContent();
     }
@@ -131,6 +143,17 @@ public class AnalyticsController : ControllerBase
 
         var parsedVenueId = venueId;
         return _venues.GetVenues().Any(venue => string.Equals(venue.Id, parsedVenueId, StringComparison.Ordinal));
+    }
+
+    private bool IsActiveGatheringRef(string value)
+    {
+        const string prefix = "gathering:";
+        if (!value.StartsWith(prefix, StringComparison.Ordinal)) return false;
+        var gatheringId = value[prefix.Length..];
+        if (gatheringId.Length != 32 || !gatheringId.All(Uri.IsHexDigit)) return false;
+        var today = DateOnly.FromDateTime(DateTime.UtcNow.AddHours(5)).ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture);
+        return _db.InterestGatherings.AsNoTracking().Any(item =>
+            item.Id == gatheringId && !item.IsCancelled && item.MeetupDate.CompareTo(today) >= 0);
     }
 }
 
