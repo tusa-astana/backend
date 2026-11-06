@@ -97,6 +97,36 @@ public class AnalyticsController : ControllerBase
         return Ok(summary);
     }
 
+    [HttpGet("summary/meetup-density")]
+    public async Task<IActionResult> MeetupDensitySummary(
+        [FromHeader(Name = "X-Telegram-Init-Data")] string? initData,
+        CancellationToken cancellationToken)
+    {
+        var user = _auth.ValidateInitData(initData);
+        if (user is null || !_users.IsAdmin(user.Id)) return StatusCode(StatusCodes.Status403Forbidden);
+
+        var fromDate = DateOnly.FromDateTime(DateTime.UtcNow.AddHours(5));
+        var throughDate = fromDate.AddDays(6);
+        var fromDateText = fromDate.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture);
+        var throughDateText = throughDate.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture);
+        var qualifyingPlans = await _db.MeetupAttendances.AsNoTracking()
+            .Where(item => item.MeetupDate.CompareTo(fromDateText) >= 0 && item.MeetupDate.CompareTo(throughDateText) <= 0)
+            .GroupBy(item => new { item.VenueId, item.MeetupDate })
+            .Where(group => group.Count() >= 2)
+            .Select(group => new { group.Key.VenueId, group.Key.MeetupDate, RsvpCount = group.Count() })
+            .OrderBy(item => item.MeetupDate)
+            .ThenBy(item => item.VenueId)
+            .ToListAsync(cancellationToken);
+
+        var venueNames = _venues.GetVenues().ToDictionary(venue => venue.Id, venue => venue.Name, StringComparer.Ordinal);
+        var plans = qualifyingPlans
+            .Where(plan => venueNames.ContainsKey(plan.VenueId))
+            .Select(plan => new MeetupDensityPlanResponse(plan.VenueId, venueNames[plan.VenueId], plan.MeetupDate, plan.RsvpCount))
+            .ToArray();
+
+        return Ok(new MeetupDensitySummaryResponse(fromDateText, throughDateText, plans));
+    }
+
     [HttpGet("summary/meetup-campaigns")]
     public IActionResult MeetupCampaignSummary([FromHeader(Name = "X-Telegram-Init-Data")] string? initData)
     {
@@ -170,3 +200,7 @@ public class TrackCommunityBeaconRequest
 {
     [Required, StringLength(120)] public string Ref { get; set; } = "";
 }
+
+public sealed record MeetupDensitySummaryResponse(string FromDate, string ThroughDate, IReadOnlyList<MeetupDensityPlanResponse> Plans);
+
+public sealed record MeetupDensityPlanResponse(string VenueId, string Venue, string Date, int RsvpCount);
