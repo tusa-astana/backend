@@ -101,30 +101,32 @@ builder.Services.AddCors(options =>
 });
 
 var app = builder.Build();
-
-using (var scope = app.Services.CreateScope())
-{
-    var db = scope.ServiceProvider.GetRequiredService<TusaMapDbContext>();
-    db.Database.EnsureCreated();
-    DatabaseSchema.EnsureCompatible(db);
-    Tusa2026EventSeeder.Ensure(db, builder.Configuration);
-}
-
-if (builder.Configuration.GetValue("Telegram:ConfigureOnStartup", true))
-{
-    using var scope = app.Services.CreateScope();
-    await scope.ServiceProvider.GetRequiredService<ITelegramBotService>().ConfigureWebAppAsync();
-    await scope.ServiceProvider.GetRequiredService<ITelegramBotService>().ConfigureWebhookAsync();
-}
+var startupReady = 0;
 
 if (app.Environment.IsDevelopment() && !builder.Configuration.GetValue("Telegram:HideSwagger", false))
     app.UseSwagger().UseSwaggerUI();
 
 app.UseRouting();
+app.Use(async (context, next) =>
+{
+    var isApiRequest = context.Request.Path.StartsWithSegments("/api");
+    var isHealthCheck = context.Request.Path.Equals("/api/health", StringComparison.OrdinalIgnoreCase);
+    if (isApiRequest && !isHealthCheck && !HttpMethods.IsOptions(context.Request.Method) && Volatile.Read(ref startupReady) == 0)
+    {
+        context.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+        await context.Response.WriteAsJsonAsync(new { status = "starting" });
+        return;
+    }
+
+    await next();
+});
 app.UseCors();
 app.UseRateLimiter();
 app.MapGet("/api/health", async (TusaMapDbContext db, CancellationToken cancellationToken) =>
 {
+    if (Volatile.Read(ref startupReady) == 0)
+        return Results.Json(new { status = "starting" }, statusCode: StatusCodes.Status503ServiceUnavailable);
+
     try
     {
         var connected = await db.Database.CanConnectAsync(cancellationToken);
@@ -145,4 +147,44 @@ app.UseStaticFiles();
 app.MapControllers();
 app.MapFallbackToFile("index.html");
 
-app.Run();
+await app.StartAsync();
+
+try
+{
+    using (var scope = app.Services.CreateScope())
+    {
+        var db = scope.ServiceProvider.GetRequiredService<TusaMapDbContext>();
+        db.Database.EnsureCreated();
+        DatabaseSchema.EnsureCompatible(db);
+        Tusa2026EventSeeder.Ensure(db, builder.Configuration);
+    }
+
+    Volatile.Write(ref startupReady, 1);
+}
+catch (Exception exception)
+{
+    app.Logger.LogCritical(exception, "Database initialization failed during startup");
+    throw;
+}
+
+if (builder.Configuration.GetValue("Telegram:ConfigureOnStartup", true))
+{
+    using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+    try
+    {
+        using var scope = app.Services.CreateScope();
+        var telegramBot = scope.ServiceProvider.GetRequiredService<ITelegramBotService>();
+        await telegramBot.ConfigureWebAppAsync(timeout.Token);
+        await telegramBot.ConfigureWebhookAsync(timeout.Token);
+    }
+    catch (OperationCanceledException) when (timeout.IsCancellationRequested)
+    {
+        app.Logger.LogWarning("Telegram startup configuration timed out; API remains available");
+    }
+    catch (HttpRequestException exception)
+    {
+        app.Logger.LogWarning(exception, "Telegram startup configuration failed; API remains available");
+    }
+}
+
+await app.WaitForShutdownAsync();
