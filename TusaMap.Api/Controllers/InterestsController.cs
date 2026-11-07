@@ -277,12 +277,26 @@ public sealed class InterestsController(
     {
         var identity = auth.ValidateInitData(Request.Headers["X-Telegram-Init-Data"].ToString());
         if (identity is null) return Unauthorized("Открой TUSA внутри Telegram, чтобы выйти из группы.");
+        var today = DateOnly.FromDateTime(DateTime.UtcNow.AddHours(5)).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+        var hostsUpcomingGathering = await db.InterestGatherings.AnyAsync(item =>
+            item.InterestId == interestId && item.HostTelegramUserId == identity.Id &&
+            !item.IsCancelled && item.MeetupDate.CompareTo(today) >= 0, cancellationToken);
+        if (hostsUpcomingGathering)
+            return Conflict("Сначала отмени свои будущие встречи, затем выйди из группы.");
+
+        var gatheringIds = await db.InterestGatherings.AsNoTracking()
+            .Where(item => item.InterestId == interestId)
+            .Select(item => item.Id)
+            .ToListAsync(cancellationToken);
+        var attendanceRows = await db.InterestGatheringAttendances
+            .Where(item => item.TelegramUserId == identity.Id && gatheringIds.Contains(item.GatheringId))
+            .ToListAsync(cancellationToken);
+        db.InterestGatheringAttendances.RemoveRange(attendanceRows);
+
         var membership = await db.InterestGroupMemberships.FindAsync([interestId, identity.Id], cancellationToken);
-        if (membership is not null)
-        {
-            db.InterestGroupMemberships.Remove(membership);
+        if (membership is not null) db.InterestGroupMemberships.Remove(membership);
+        if (attendanceRows.Count > 0 || membership is not null)
             await db.SaveChangesAsync(cancellationToken);
-        }
         return NoContent();
     }
 
