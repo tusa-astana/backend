@@ -82,7 +82,7 @@ public sealed class InterestsController(
             group.Id, group.Name, group.Description, group.Emoji,
             counts.GetValueOrDefault(group.Id), joined.Contains(group.Id),
             gatherings.Where(item => item.InterestId == group.Id).Select(item => new InterestGatheringResponse(
-                item.Id, item.InterestId, item.HostTelegramUserId, item.Title, item.MeetupDate, item.StartTime,
+                item.Id, item.InterestId, item.Title, item.MeetupDate, item.StartTime,
                 item.Place, item.Details,
                 attendanceRows.Count(row => row.GatheringId == item.Id),
                 user is not null && attendanceRows.Any(row => row.GatheringId == item.Id && row.TelegramUserId == user.Id),
@@ -137,7 +137,7 @@ public sealed class InterestsController(
         await db.SaveChangesAsync(cancellationToken);
 
         return StatusCode(StatusCodes.Status201Created, new InterestGatheringResponse(
-            gathering.Id, interestId, identity.Id, gathering.Title, gathering.MeetupDate, gathering.StartTime,
+            gathering.Id, interestId, gathering.Title, gathering.MeetupDate, gathering.StartTime,
             gathering.Place, gathering.Details, 1, true, true));
     }
 
@@ -334,7 +334,7 @@ public sealed class InterestsController(
 
 public sealed record InterestGroupResponse(string Id, string Name, string Description, string Emoji, int MemberCount, bool IsMember,
     IReadOnlyList<InterestGatheringResponse> Gatherings);
-public sealed record InterestGatheringResponse(string Id, string InterestId, long HostTelegramUserId, string Title, string Date,
+public sealed record InterestGatheringResponse(string Id, string InterestId, string Title, string Date,
     string Time, string Place, string Details, int GoingCount, bool UserGoing, bool IsHost);
 public sealed record UpcomingInterestGatheringResponse(string Id, string InterestId, string InterestName, string InterestEmoji,
     string Title, string Date, string Time, string Place, string Details, int GoingCount);
