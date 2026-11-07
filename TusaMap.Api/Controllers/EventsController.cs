@@ -45,7 +45,11 @@ public class EventsController : ControllerBase
             list = list.Where(e => new[] { e.Title, e.Place, e.Address, e.Description, e.Category }
                 .Any(value => value.Contains(query, StringComparison.OrdinalIgnoreCase))).ToList();
         }
-        foreach (var eventItem in list) SetTicketSalesAvailability(eventItem);
+        foreach (var eventItem in list)
+        {
+            SetTicketSalesAvailability(eventItem);
+            RemovePrivateOrganizerContacts(eventItem);
+        }
         return Ok(list);
     }
 
@@ -56,6 +60,7 @@ public class EventsController : ControllerBase
         if (e == null)
             return NotFound();
         SetTicketSalesAvailability(e);
+        RemovePrivateOrganizerContacts(e);
         return Ok(e);
     }
 
@@ -136,6 +141,13 @@ public class EventsController : ControllerBase
     private void SetTicketSalesAvailability(EventItem eventItem)
     {
         eventItem.TicketSalesEnabled = false;
+    }
+
+    private static void RemovePrivateOrganizerContacts(EventItem eventItem)
+    {
+        eventItem.OrganizerEmail = "";
+        eventItem.OrganizerPhone = "";
+        eventItem.OrganizerTelegramId = 0;
     }
 
     [HttpGet("pending")]
