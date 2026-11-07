@@ -99,6 +99,14 @@ public class AdminController : ControllerBase
             target.SuspendedAt = DateTime.UtcNow;
             var memberships = await _db.InterestGroupMemberships.Where(item => item.TelegramUserId == target.TelegramUserId).ToListAsync(cancellationToken);
             _db.InterestGroupMemberships.RemoveRange(memberships);
+            var hostedGatherings = await _db.InterestGatherings
+                .Where(item => item.HostTelegramUserId == target.TelegramUserId && !item.IsCancelled)
+                .ToListAsync(cancellationToken);
+            foreach (var gathering in hostedGatherings) gathering.IsCancelled = true;
+            var gatheringAttendances = await _db.InterestGatheringAttendances
+                .Where(item => item.TelegramUserId == target.TelegramUserId)
+                .ToListAsync(cancellationToken);
+            _db.InterestGatheringAttendances.RemoveRange(gatheringAttendances);
         }
         report.Status = "reviewed";
         report.ReviewAction = request.Action;
