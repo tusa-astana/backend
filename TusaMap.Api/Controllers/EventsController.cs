@@ -75,6 +75,7 @@ public class EventsController : ControllerBase
     }
 
     [HttpPost("{id}/going")]
+    [EnableRateLimiting("interest-actions")]
     public ActionResult<EventGoingResponse> ToggleGoing(string id, [FromHeader(Name = "X-Telegram-Init-Data")] string? initData)
     {
         var user = _telegramAuth.ValidateInitData(initData);
