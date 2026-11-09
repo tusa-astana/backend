@@ -101,16 +101,26 @@ public class TelegramWebhookController : ControllerBase
         {
             var query = update.PreCheckoutQuery;
             var valid = query.From is not null && (query.InvoicePayload.StartsWith("eventpromo:", StringComparison.OrdinalIgnoreCase)
-                ? await IsValidEventPromotionInvoiceAsync(query.InvoicePayload, query.Currency, query.TotalAmount, query.From.Id, cancellationToken)
+                ? await IsValidEventPromotionInvoiceAsync(query.InvoicePayload, query.Currency, query.TotalAmount, query.From.Id, "pending", cancellationToken)
                 : IsValidInvoice(query.InvoicePayload, query.Currency, query.TotalAmount, query.From.Id));
             if (valid && query.InvoicePayload.StartsWith("eventpromo:", StringComparison.OrdinalIgnoreCase))
             {
-                var promotionId = query.InvoicePayload["eventpromo:".Length..];
-                var promotion = await _db.EventPromotions.AsNoTracking().FirstOrDefaultAsync(item => item.Id == promotionId, cancellationToken);
-                if (promotion is not null)
+                var parts = query.InvoicePayload.Split(':', StringSplitOptions.TrimEntries);
+                var promotionId = parts.Length == 3 ? parts[1] : "";
+                var nonce = parts.Length == 3 ? parts[2] : "";
+                var locked = await _db.EventPromotions
+                    .Where(item => item.Id == promotionId && item.Status == "pending" && item.InvoiceNonce == nonce)
+                    .ExecuteUpdateAsync(setters => setters.SetProperty(item => item.Status, "checkout"), cancellationToken);
+                valid = locked == 1;
+                if (valid)
                 {
-                    _db.FunnelEvents.Add(new FunnelEvent { Name = "promotion_pre_checkout", EventId = promotion.EventId });
-                    await _db.SaveChangesAsync(cancellationToken);
+                    var promotion = await _db.EventPromotions.AsNoTracking().FirstOrDefaultAsync(item => item.Id == promotionId, cancellationToken);
+                    if (promotion is null) valid = false;
+                    else
+                    {
+                        _db.FunnelEvents.Add(new FunnelEvent { Name = "promotion_pre_checkout", EventId = promotion.EventId });
+                        await _db.SaveChangesAsync(cancellationToken);
+                    }
                 }
             }
             if (valid && !query.InvoicePayload.StartsWith("subscription:", StringComparison.OrdinalIgnoreCase) &&
@@ -388,14 +398,17 @@ public class TelegramWebhookController : ControllerBase
         await SendMessageAsync(token, campaign.OrganizerTelegramId, "Оплата промо возвращена в Telegram Stars; выделенное размещение остановлено.", cancellationToken);
     }
 
-    private async Task<bool> IsValidEventPromotionInvoiceAsync(string payload, string currency, int totalAmount, long payerId, CancellationToken cancellationToken)
+    private async Task<bool> IsValidEventPromotionInvoiceAsync(string payload, string currency, int totalAmount, long payerId,
+        string expectedStatus, CancellationToken cancellationToken)
     {
         if (!_configuration.GetValue("Payments:EventPromotionEnabled", false) || !string.Equals(currency, "XTR", StringComparison.Ordinal)) return false;
         var parts = payload.Split(':', StringSplitOptions.TrimEntries);
-        if (parts.Length != 2 || parts[0] != "eventpromo") return false;
+        if (parts.Length != 3 || parts[0] != "eventpromo" || !Guid.TryParseExact(parts[1], "N", out _) ||
+            !Guid.TryParseExact(parts[2], "N", out _)) return false;
         var campaign = await _db.EventPromotions.AsNoTracking().FirstOrDefaultAsync(item => item.Id == parts[1], cancellationToken);
-        if (campaign is null || campaign.Status != "pending" || campaign.OrganizerTelegramId != payerId ||
+        if (campaign is null || campaign.Status != expectedStatus || campaign.OrganizerTelegramId != payerId ||
             campaign.TermsAcceptedAt == default || campaign.TermsVersion != EventPromotionsController.TermsVersion ||
+            campaign.InvoiceNonce != parts[2] ||
             campaign.StarsAmount != _configuration.GetValue<int>("Payments:EventPromotionStars", 500) || totalAmount != campaign.StarsAmount) return false;
         var ev = await _db.Events.AsNoTracking().FirstOrDefaultAsync(item => item.Id == campaign.EventId, cancellationToken);
         return ev is not null && ev.Status == "approved" && !ev.IsDemo && !string.IsNullOrWhiteSpace(ev.TicketSellerName) &&
@@ -408,18 +421,21 @@ public class TelegramWebhookController : ControllerBase
         int totalAmount, string chargeId, CancellationToken cancellationToken)
     {
         var parts = payload.Split(':', StringSplitOptions.TrimEntries);
-        var campaign = parts.Length == 2
+        var campaign = parts.Length == 3 && parts[0] == "eventpromo"
             ? await _db.EventPromotions.FirstOrDefaultAsync(item => item.Id == parts[1], cancellationToken)
             : null;
         if (campaign?.TelegramPaymentChargeId == chargeId && campaign.Status is "paid" or "refunded" or "refund_requested") return;
-        if (campaign is null || campaign.Status != "pending" ||
-            !await IsValidEventPromotionInvoiceAsync(payload, currency, totalAmount, payerId, cancellationToken))
+        if (campaign is null || campaign.Status != "checkout" ||
+            !await IsValidEventPromotionInvoiceAsync(payload, currency, totalAmount, payerId, "checkout", cancellationToken))
         {
             var refunded = await _telegramBot.RefundStarPaymentAsync(payerId, chargeId, cancellationToken);
-            if (campaign is not null)
+            var matchesCurrentInvoice = campaign is not null && parts.Length == 3 && campaign.Status == "checkout" &&
+                                        campaign.InvoiceNonce == parts[2] && campaign.OrganizerTelegramId == payerId;
+            if (matchesCurrentInvoice)
             {
-                campaign.Status = refunded ? "refunded" : "refund_requested";
+                campaign!.Status = refunded ? "refunded" : "refund_requested";
                 campaign.TelegramPaymentChargeId = chargeId;
+                campaign.InvoiceNonce = null;
                 if (refunded) _db.FunnelEvents.Add(new FunnelEvent { Name = "promotion_refunded", EventId = campaign.EventId });
                 await _db.SaveChangesAsync(cancellationToken);
             }
@@ -437,6 +453,7 @@ public class TelegramWebhookController : ControllerBase
         var expiresAt = eventDate.AddDays(1).ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc).AddHours(-5);
         campaign.Status = "paid";
         campaign.TelegramPaymentChargeId = chargeId;
+        campaign.InvoiceNonce = null;
         campaign.ActivatedAt = DateTime.UtcNow;
         campaign.ExpiresAt = expiresAt;
         ev.FeaturedUntilUtc = expiresAt;

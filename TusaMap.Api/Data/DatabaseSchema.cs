@@ -118,6 +118,7 @@ public static class DatabaseSchema
                 OrganizerTelegramId INTEGER NOT NULL, StarsAmount INTEGER NOT NULL,
                 Status TEXT NOT NULL DEFAULT 'pending', TermsAcceptedAt TEXT NOT NULL,
                 TermsVersion TEXT NOT NULL, TelegramPaymentChargeId TEXT NULL UNIQUE,
+                InvoiceNonce TEXT NULL,
                 CreatedAt TEXT NOT NULL, ActivatedAt TEXT NULL, ExpiresAt TEXT NULL
             )
             """);
@@ -148,6 +149,7 @@ public static class DatabaseSchema
         AddColumnIfMissing(db, "Events", "TicketUrl", "TEXT NOT NULL DEFAULT ''");
         AddColumnIfMissing(db, "Events", "TicketSellerName", "TEXT NOT NULL DEFAULT ''");
         AddColumnIfMissing(db, "Events", "FeaturedUntilUtc", "TEXT NULL");
+        AddColumnIfMissing(db, "EventPromotions", "InvoiceNonce", "TEXT NULL");
         AddColumnIfMissing(db, "Users", "PhotoUrl", "TEXT NULL");
         AddColumnIfMissing(db, "Users", "IsSuspended", "INTEGER NOT NULL DEFAULT 0");
         AddColumnIfMissing(db, "Users", "SuspendedAt", "TEXT NULL");
@@ -204,7 +206,8 @@ public static class DatabaseSchema
         db.Database.ExecuteSqlRaw("ALTER TABLE \"Events\" ADD COLUMN IF NOT EXISTS \"TicketUrl\" TEXT NOT NULL DEFAULT ''");
         db.Database.ExecuteSqlRaw("ALTER TABLE \"Events\" ADD COLUMN IF NOT EXISTS \"TicketSellerName\" TEXT NOT NULL DEFAULT ''");
         db.Database.ExecuteSqlRaw("ALTER TABLE \"Events\" ADD COLUMN IF NOT EXISTS \"FeaturedUntilUtc\" TIMESTAMPTZ NULL");
-        db.Database.ExecuteSqlRaw("CREATE TABLE IF NOT EXISTS \"EventPromotions\" (\"Id\" TEXT PRIMARY KEY, \"EventId\" TEXT NOT NULL UNIQUE, \"OrganizerTelegramId\" BIGINT NOT NULL, \"StarsAmount\" INTEGER NOT NULL, \"Status\" TEXT NOT NULL DEFAULT 'pending', \"TermsAcceptedAt\" TIMESTAMPTZ NOT NULL, \"TermsVersion\" TEXT NOT NULL, \"TelegramPaymentChargeId\" TEXT NULL UNIQUE, \"CreatedAt\" TIMESTAMPTZ NOT NULL, \"ActivatedAt\" TIMESTAMPTZ NULL, \"ExpiresAt\" TIMESTAMPTZ NULL)");
+        db.Database.ExecuteSqlRaw("CREATE TABLE IF NOT EXISTS \"EventPromotions\" (\"Id\" TEXT PRIMARY KEY, \"EventId\" TEXT NOT NULL UNIQUE, \"OrganizerTelegramId\" BIGINT NOT NULL, \"StarsAmount\" INTEGER NOT NULL, \"Status\" TEXT NOT NULL DEFAULT 'pending', \"TermsAcceptedAt\" TIMESTAMPTZ NOT NULL, \"TermsVersion\" TEXT NOT NULL, \"TelegramPaymentChargeId\" TEXT NULL UNIQUE, \"InvoiceNonce\" TEXT NULL, \"CreatedAt\" TIMESTAMPTZ NOT NULL, \"ActivatedAt\" TIMESTAMPTZ NULL, \"ExpiresAt\" TIMESTAMPTZ NULL)");
+        db.Database.ExecuteSqlRaw("ALTER TABLE \"EventPromotions\" ADD COLUMN IF NOT EXISTS \"InvoiceNonce\" TEXT NULL");
         db.Database.ExecuteSqlRaw("""
             CREATE TABLE IF NOT EXISTS "OrganizerSubscriptions" (
                 "TelegramUserId" BIGINT PRIMARY KEY,

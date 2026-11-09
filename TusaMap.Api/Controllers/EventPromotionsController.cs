@@ -14,6 +14,7 @@ namespace TusaMap.Api.Controllers;
 public sealed class EventPromotionsController : ControllerBase
 {
     public const string TermsVersion = "2026-11-09";
+    private static readonly TimeSpan CheckoutLockTimeout = TimeSpan.FromMinutes(15);
     private readonly TusaMapDbContext _db;
     private readonly ITelegramAuthService _auth;
     private readonly IConfiguration _configuration;
@@ -38,7 +39,8 @@ public sealed class EventPromotionsController : ControllerBase
         var stars = _configuration.GetValue<int>("Payments:EventPromotionStars", 500);
         var enabled = _configuration.GetValue("Payments:EventPromotionEnabled", false);
         var campaign = _db.EventPromotions.AsNoTracking().FirstOrDefault(item => item.EventId == eventId);
-        var canStartCampaign = campaign is null || campaign.Status is "failed" or "cancelled" or "pending";
+        var staleCheckout = campaign?.Status == "checkout" && campaign.CreatedAt <= DateTime.UtcNow - CheckoutLockTimeout;
+        var canStartCampaign = campaign is null || campaign.Status is "failed" or "cancelled" or "pending" || staleCheckout;
         var dateIsFuture = DateOnly.TryParseExact(ev.Date, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var eventDate)
                            && eventDate >= DateOnly.FromDateTime(DateTime.UtcNow.AddHours(5));
         var eligible = stars > 0 && ev.Status == "approved" && !ev.IsDemo && dateIsFuture &&
@@ -87,7 +89,8 @@ public sealed class EventPromotionsController : ControllerBase
         var stars = _configuration.GetValue<int>("Payments:EventPromotionStars", 500);
         if (stars <= 0) return Conflict("Цена продвижения не настроена.");
         var existingCampaign = await _db.EventPromotions.FirstOrDefaultAsync(item => item.EventId == eventId, cancellationToken);
-        if (existingCampaign is not null && existingCampaign.Status is not ("failed" or "cancelled" or "pending"))
+        var staleCheckout = existingCampaign?.Status == "checkout" && existingCampaign.CreatedAt <= DateTime.UtcNow - CheckoutLockTimeout;
+        if (existingCampaign is not null && existingCampaign.Status is not ("failed" or "cancelled" or "pending") && !staleCheckout)
             return Conflict("Для этого события уже создана кампания продвижения.");
 
         var token = _configuration["Telegram:BotToken"];
@@ -102,12 +105,13 @@ public sealed class EventPromotionsController : ControllerBase
         campaign.Status = "pending";
         campaign.CreatedAt = DateTime.UtcNow;
         campaign.TelegramPaymentChargeId = null;
+        campaign.InvoiceNonce = Guid.NewGuid().ToString("N");
         campaign.ActivatedAt = null;
         campaign.ExpiresAt = null;
         if (existingCampaign is null) _db.EventPromotions.Add(campaign);
         await _db.SaveChangesAsync(cancellationToken);
 
-        var payload = $"eventpromo:{campaign.Id}";
+        var payload = $"eventpromo:{campaign.Id}:{campaign.InvoiceNonce}";
         try
         {
             using var response = await _clients.CreateClient().PostAsJsonAsync($"https://api.telegram.org/bot{token}/createInvoiceLink", new
@@ -154,10 +158,11 @@ public sealed class EventPromotionsController : ControllerBase
         var user = _auth.ValidateInitData(initData);
         if (user is null) return Unauthorized();
         var campaign = await _db.EventPromotions.FirstOrDefaultAsync(
-            item => item.EventId == eventId && item.OrganizerTelegramId == user.Id && item.Status == "pending",
+            item => item.EventId == eventId && item.OrganizerTelegramId == user.Id && (item.Status == "pending" || item.Status == "checkout"),
             cancellationToken);
         if (campaign is null) return NotFound();
         campaign.Status = "cancelled";
+        campaign.InvoiceNonce = null;
         _db.FunnelEvents.Add(new Models.FunnelEvent { Name = "promotion_invoice_cancelled", EventId = eventId });
         await _db.SaveChangesAsync(cancellationToken);
         return NoContent();
