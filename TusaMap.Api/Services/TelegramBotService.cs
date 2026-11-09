@@ -14,6 +14,7 @@ public interface ITelegramBotService
     Task NotifyAdminsOfEventSubmissionAsync(EventItem eventItem, CancellationToken cancellationToken = default);
     Task NotifyOrganizerOfEventReviewAsync(EventItem eventItem, bool approved, CancellationToken cancellationToken = default);
     Task<bool> NotifyTicketAvailabilityAsync(long telegramUserId, string eventTitle, string eventUrl, CancellationToken cancellationToken = default);
+    Task<bool> NotifyInterestGatheringAsync(long telegramUserId, string interestName, InterestGathering gathering, CancellationToken cancellationToken = default);
     Task<bool> NotifyAdminsOfPaymentSupportAsync(long telegramUserId, string details, CancellationToken cancellationToken = default);
     Task<bool> SendPrivateVenueAddressAsync(long telegramUserId, string eventTitle, string address, string date, string time, CancellationToken cancellationToken = default);
     Task<bool> RefundStarPaymentAsync(long telegramUserId, string chargeId, CancellationToken cancellationToken = default);
@@ -141,6 +142,40 @@ public class TelegramBotService : ITelegramBotService
         catch (HttpRequestException exception)
         {
             _logger.LogWarning(exception, "Ticket availability notification transport failed for Telegram user {TelegramUserId}", telegramUserId);
+        }
+        return false;
+    }
+
+    public async Task<bool> NotifyInterestGatheringAsync(long telegramUserId, string interestName, InterestGathering gathering, CancellationToken cancellationToken = default)
+    {
+        var token = _configuration["Telegram:BotToken"];
+        if (string.IsNullOrWhiteSpace(token) || telegramUserId == 0) return false;
+        var appUrl = _configuration["Telegram:WebAppUrl"]?.TrimEnd('/');
+        object? replyMarkup = string.IsNullOrWhiteSpace(appUrl) ? null : new
+        {
+            inline_keyboard = new[]
+            {
+                new[] { new { text = "Открыть встречу", web_app = new { url = $"{appUrl}/interests?gathering={Uri.EscapeDataString(gathering.Id)}" } } },
+            },
+        };
+        var text = $"Новая открытая встреча по интересу «{interestName}»\n\n{gathering.Title}\n{gathering.MeetupDate} · {gathering.StartTime}\n{gathering.Place}";
+        try
+        {
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            timeout.CancelAfter(TimeSpan.FromSeconds(5));
+            using var response = await _clients.CreateClient().PostAsJsonAsync(
+                $"https://api.telegram.org/bot{token}/sendMessage",
+                new { chat_id = telegramUserId, text, reply_markup = replyMarkup }, timeout.Token);
+            if (response.IsSuccessStatusCode) return true;
+            _logger.LogWarning("Interest gathering notification failed: {StatusCode}", response.StatusCode);
+        }
+        catch (OperationCanceledException exception)
+        {
+            _logger.LogWarning(exception, "Interest gathering notification timed out or was cancelled");
+        }
+        catch (HttpRequestException exception)
+        {
+            _logger.LogWarning(exception, "Interest gathering notification transport failed");
         }
         return false;
     }

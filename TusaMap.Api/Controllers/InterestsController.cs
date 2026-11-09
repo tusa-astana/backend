@@ -14,7 +14,8 @@ public sealed class InterestsController(
     TusaMapDbContext db,
     ITelegramAuthService auth,
     IUserStore users,
-    IInterestGroupCatalog catalog) : ControllerBase
+    IInterestGroupCatalog catalog,
+    ITelegramBotService telegramBot) : ControllerBase
 {
     private static readonly HashSet<string> ReportReasons = new(StringComparer.Ordinal)
     {
@@ -26,7 +27,7 @@ public sealed class InterestsController(
     {
         var today = DateOnly.FromDateTime(DateTime.UtcNow.AddHours(5)).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
         var gatherings = await db.InterestGatherings.AsNoTracking()
-            .Where(item => !item.IsCancelled && item.MeetupDate.CompareTo(today) >= 0)
+            .Where(item => item.IsOpen && !item.IsCancelled && item.MeetupDate.CompareTo(today) >= 0)
             .OrderBy(item => item.MeetupDate)
             .ThenBy(item => item.StartTime)
             .Take(6)
@@ -54,19 +55,20 @@ public sealed class InterestsController(
     public async Task<ActionResult<IReadOnlyList<InterestGroupResponse>>> Get(CancellationToken cancellationToken)
     {
         var user = auth.ValidateInitData(Request.Headers["X-Telegram-Init-Data"].ToString());
-        var joined = user is null
-            ? new HashSet<string>(StringComparer.Ordinal)
-            : (await db.InterestGroupMemberships.AsNoTracking()
+        var userMemberships = user is null
+            ? new List<InterestGroupMembership>()
+            : await db.InterestGroupMemberships.AsNoTracking()
                 .Where(item => item.TelegramUserId == user.Id)
-                .Select(item => item.InterestId)
-                .ToListAsync(cancellationToken)).ToHashSet(StringComparer.Ordinal);
+                .ToListAsync(cancellationToken);
+        var joined = userMemberships.Select(item => item.InterestId).ToHashSet(StringComparer.Ordinal);
+        var notificationPreferences = userMemberships.ToDictionary(item => item.InterestId, item => item.NotifyNewGatherings, StringComparer.Ordinal);
         var counts = await db.InterestGroupMemberships.AsNoTracking()
             .GroupBy(item => item.InterestId)
             .Select(group => new { group.Key, Count = group.Count() })
             .ToDictionaryAsync(item => item.Key, item => item.Count, cancellationToken);
         var today = DateOnly.FromDateTime(DateTime.UtcNow.AddHours(5)).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
         var storedGatherings = await db.InterestGatherings.AsNoTracking()
-            .Where(item => !item.IsCancelled)
+            .Where(item => !item.IsCancelled && (item.IsOpen || (user != null && item.HostTelegramUserId == user.Id)))
             .OrderBy(item => item.MeetupDate)
             .ThenBy(item => item.StartTime)
             .ToListAsync(cancellationToken);
@@ -77,16 +79,25 @@ public sealed class InterestsController(
         var attendanceRows = await db.InterestGatheringAttendances.AsNoTracking()
             .Where(item => gatheringIds.Contains(item.GatheringId))
             .ToListAsync(cancellationToken);
+        var unreadGatheringIds = user is null
+            ? new HashSet<string>(StringComparer.Ordinal)
+            : (await db.InterestGatheringNotifications.AsNoTracking()
+                .Where(item => item.TelegramUserId == user.Id && item.ReadAt == null && gatheringIds.Contains(item.GatheringId))
+                .Select(item => item.GatheringId)
+                .ToListAsync(cancellationToken)).ToHashSet(StringComparer.Ordinal);
 
         return Ok(catalog.GetGroups().Select(group => new InterestGroupResponse(
             group.Id, group.Name, group.Description, group.Emoji,
-            counts.GetValueOrDefault(group.Id), joined.Contains(group.Id),
+            counts.GetValueOrDefault(group.Id), joined.Contains(group.Id), notificationPreferences.GetValueOrDefault(group.Id),
             gatherings.Where(item => item.InterestId == group.Id).Select(item => new InterestGatheringResponse(
                 item.Id, item.InterestId, item.Title, item.MeetupDate, item.StartTime,
                 item.Place, item.Details,
                 attendanceRows.Count(row => row.GatheringId == item.Id),
                 user is not null && attendanceRows.Any(row => row.GatheringId == item.Id && row.TelegramUserId == user.Id),
-                user is not null && item.HostTelegramUserId == user.Id)).ToArray())).ToArray());
+                user is not null && item.HostTelegramUserId == user.Id,
+                item.IsOpen,
+                user is not null && joined.Contains(group.Id) && item.IsOpen && item.HostTelegramUserId != user.Id &&
+                    unreadGatheringIds.Contains(item.Id) && !attendanceRows.Any(row => row.GatheringId == item.Id && row.TelegramUserId == user.Id))).ToArray())).ToArray());
     }
 
     [HttpPost("{interestId}/gatherings")]
@@ -127,6 +138,7 @@ public sealed class InterestsController(
             StartTime = request.Time,
             Place = place,
             Details = details,
+            IsOpen = request.IsOpen,
         };
         db.InterestGatherings.Add(gathering);
         db.InterestGatheringAttendances.Add(new InterestGatheringAttendance
@@ -140,11 +152,33 @@ public sealed class InterestsController(
             Ref = $"gathering:{gathering.Id}",
             TelegramUserId = null,
         });
+        List<(long TelegramUserId, bool NotifyTelegram)> recipients = [];
+        if (gathering.IsOpen)
+        {
+            var recipientRows = await db.InterestGroupMemberships.AsNoTracking()
+                .Where(item => item.InterestId == interestId && item.TelegramUserId != identity.Id)
+                .Join(db.Users.AsNoTracking().Where(item => !item.IsSuspended), membership => membership.TelegramUserId,
+                    member => member.TelegramUserId, (membership, member) => new { member.TelegramUserId, membership.NotifyNewGatherings })
+                .ToListAsync(cancellationToken);
+            recipients = recipientRows.Select(item => (item.TelegramUserId, item.NotifyNewGatherings)).ToList();
+            db.InterestGatheringNotifications.AddRange(recipients.Select(recipient => new InterestGatheringNotification
+            {
+                GatheringId = gathering.Id,
+                TelegramUserId = recipient.TelegramUserId,
+            }));
+        }
         await db.SaveChangesAsync(cancellationToken);
+
+        if (gathering.IsOpen)
+        {
+            var interest = catalog.Find(interestId)!;
+            foreach (var recipient in recipients.Where(item => item.NotifyTelegram))
+                await telegramBot.NotifyInterestGatheringAsync(recipient.TelegramUserId, interest.Name, gathering, cancellationToken);
+        }
 
         return StatusCode(StatusCodes.Status201Created, new InterestGatheringResponse(
             gathering.Id, interestId, gathering.Title, gathering.MeetupDate, gathering.StartTime,
-            gathering.Place, gathering.Details, 1, true, true));
+            gathering.Place, gathering.Details, 1, true, true, gathering.IsOpen, false));
     }
 
     [HttpPut("{interestId}/gatherings/{gatheringId}/attendance")]
@@ -161,11 +195,13 @@ public sealed class InterestsController(
         if (!isMember) return Forbid();
         var gathering = await db.InterestGatherings.FirstOrDefaultAsync(
             item => item.Id == gatheringId && item.InterestId == interestId && !item.IsCancelled, cancellationToken);
-        if (gathering is null) return NotFound("Встреча не найдена или отменена.");
+        if (gathering is null || !gathering.IsOpen) return NotFound("Открытая встреча не найдена или отменена.");
         var date = DateOnly.ParseExact(gathering.MeetupDate, "yyyy-MM-dd", CultureInfo.InvariantCulture);
         if (date < DateOnly.FromDateTime(DateTime.UtcNow.AddHours(5))) return BadRequest("Эта встреча уже прошла.");
 
         var attendance = await db.InterestGatheringAttendances.FindAsync([gatheringId, identity.Id], cancellationToken);
+        var notification = await db.InterestGatheringNotifications.FindAsync([gatheringId, identity.Id], cancellationToken);
+        var changed = false;
         if (attendance is null)
         {
             db.InterestGatheringAttendances.Add(new InterestGatheringAttendance
@@ -179,6 +215,36 @@ public sealed class InterestsController(
                 Ref = $"gathering:{gatheringId}",
                 TelegramUserId = null,
             });
+            changed = true;
+        }
+        if (notification is not null && notification.ReadAt is null)
+        {
+            notification.ReadAt = DateTime.UtcNow;
+            changed = true;
+        }
+        if (changed) await db.SaveChangesAsync(cancellationToken);
+        return NoContent();
+    }
+
+    [HttpPut("{interestId}/gatherings/{gatheringId}/notification/read")]
+    [EnableRateLimiting("interest-actions")]
+    public async Task<IActionResult> MarkGatheringNotificationRead(string interestId, string gatheringId, CancellationToken cancellationToken)
+    {
+        var identity = auth.ValidateInitData(Request.Headers["X-Telegram-Init-Data"].ToString());
+        if (identity is null) return Unauthorized("Открой TUSA внутри Telegram, чтобы открыть уведомление.");
+        if (identity.IsBot) return Forbid();
+        var currentUser = await db.Users.AsNoTracking().FirstOrDefaultAsync(item => item.TelegramUserId == identity.Id, cancellationToken);
+        if (currentUser?.IsSuspended == true) return Forbid();
+        var isMember = await db.InterestGroupMemberships.AnyAsync(
+            item => item.InterestId == interestId && item.TelegramUserId == identity.Id, cancellationToken);
+        if (!isMember) return Forbid();
+        var belongsToGroup = await db.InterestGatherings.AnyAsync(
+            item => item.Id == gatheringId && item.InterestId == interestId && item.IsOpen, cancellationToken);
+        if (!belongsToGroup) return NotFound();
+        var notification = await db.InterestGatheringNotifications.FindAsync([gatheringId, identity.Id], cancellationToken);
+        if (notification is not null && notification.ReadAt is null)
+        {
+            notification.ReadAt = DateTime.UtcNow;
             await db.SaveChangesAsync(cancellationToken);
         }
         return NoContent();
@@ -219,6 +285,10 @@ public sealed class InterestsController(
         if (gathering is null) return NoContent();
         if (gathering.HostTelegramUserId != identity.Id) return Forbid();
         gathering.IsCancelled = true;
+        var notifications = await db.InterestGatheringNotifications
+            .Where(item => item.GatheringId == gatheringId)
+            .ToListAsync(cancellationToken);
+        db.InterestGatheringNotifications.RemoveRange(notifications);
         await db.SaveChangesAsync(cancellationToken);
         return NoContent();
     }
@@ -277,6 +347,22 @@ public sealed class InterestsController(
         return NoContent();
     }
 
+    [HttpPut("{interestId}/notifications")]
+    [EnableRateLimiting("interest-actions")]
+    public async Task<IActionResult> SetGatheringNotifications(string interestId, [FromBody] SetGatheringNotificationRequest request, CancellationToken cancellationToken)
+    {
+        var identity = auth.ValidateInitData(Request.Headers["X-Telegram-Init-Data"].ToString());
+        if (identity is null) return Unauthorized("Открой TUSA внутри Telegram, чтобы изменить уведомления.");
+        if (identity.IsBot) return Forbid();
+        var user = users.Upsert(identity);
+        if (user.IsSuspended) return Forbid();
+        var membership = await db.InterestGroupMemberships.FindAsync([interestId, identity.Id], cancellationToken);
+        if (membership is null) return Forbid();
+        membership.NotifyNewGatherings = request.Enabled;
+        await db.SaveChangesAsync(cancellationToken);
+        return NoContent();
+    }
+
     [HttpDelete("{interestId}/membership")]
     [EnableRateLimiting("interest-actions")]
     public async Task<IActionResult> Leave(string interestId, CancellationToken cancellationToken)
@@ -298,10 +384,14 @@ public sealed class InterestsController(
             .Where(item => item.TelegramUserId == identity.Id && gatheringIds.Contains(item.GatheringId))
             .ToListAsync(cancellationToken);
         db.InterestGatheringAttendances.RemoveRange(attendanceRows);
+        var notifications = await db.InterestGatheringNotifications
+            .Where(item => item.TelegramUserId == identity.Id && gatheringIds.Contains(item.GatheringId))
+            .ToListAsync(cancellationToken);
+        db.InterestGatheringNotifications.RemoveRange(notifications);
 
         var membership = await db.InterestGroupMemberships.FindAsync([interestId, identity.Id], cancellationToken);
         if (membership is not null) db.InterestGroupMemberships.Remove(membership);
-        if (attendanceRows.Count > 0 || membership is not null)
+        if (attendanceRows.Count > 0 || notifications.Count > 0 || membership is not null)
             await db.SaveChangesAsync(cancellationToken);
         return NoContent();
     }
@@ -339,12 +429,13 @@ public sealed class InterestsController(
 }
 
 public sealed record InterestGroupResponse(string Id, string Name, string Description, string Emoji, int MemberCount, bool IsMember,
-    IReadOnlyList<InterestGatheringResponse> Gatherings);
+    bool NotifyNewGatherings, IReadOnlyList<InterestGatheringResponse> Gatherings);
 public sealed record InterestGatheringResponse(string Id, string InterestId, string Title, string Date,
-    string Time, string Place, string Details, int GoingCount, bool UserGoing, bool IsHost);
+    string Time, string Place, string Details, int GoingCount, bool UserGoing, bool IsHost, bool IsOpen, bool IsNew);
 public sealed record UpcomingInterestGatheringResponse(string Id, string InterestId, string InterestName, string InterestEmoji,
     string Title, string Date, string Time, string Place, string Details, int GoingCount);
 public sealed record InterestMemberResponse(long? TelegramUserId, string Name, string? PhotoUrl, string? Username, bool Anonymous, bool OpenToMeet, bool IsYou);
 public sealed record SetInterestMembershipRequest(bool IsAnonymous = true, bool OpenToMeet = false);
 public sealed record CreateInterestReportRequest(long TargetTelegramUserId, string Reason, string? Details);
-public sealed record CreateInterestGatheringRequest(string Title, string Date, string Time, string Place, string? Details);
+public sealed record CreateInterestGatheringRequest(string Title, string Date, string Time, string Place, string? Details, bool IsOpen = true);
+public sealed record SetGatheringNotificationRequest(bool Enabled);

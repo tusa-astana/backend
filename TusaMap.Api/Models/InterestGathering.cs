@@ -10,6 +10,7 @@ public sealed class InterestGathering
     public string StartTime { get; set; } = "";
     public string Place { get; set; } = "";
     public string Details { get; set; } = "";
+    public bool IsOpen { get; set; } = true;
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public bool IsCancelled { get; set; }
 }

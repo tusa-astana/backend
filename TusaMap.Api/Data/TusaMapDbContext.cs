@@ -24,6 +24,7 @@ public class TusaMapDbContext : DbContext
     public DbSet<InterestUserReport> InterestUserReports => Set<InterestUserReport>();
     public DbSet<InterestGathering> InterestGatherings => Set<InterestGathering>();
     public DbSet<InterestGatheringAttendance> InterestGatheringAttendances => Set<InterestGatheringAttendance>();
+    public DbSet<InterestGatheringNotification> InterestGatheringNotifications => Set<InterestGatheringNotification>();
     public DbSet<TicketCheckIn> TicketCheckIns => Set<TicketCheckIn>();
     public DbSet<BotMessageLog> BotMessageLogs => Set<BotMessageLog>();
 
@@ -66,6 +67,8 @@ public class TusaMapDbContext : DbContext
         modelBuilder.Entity<InterestGathering>().HasIndex(x => new { x.InterestId, x.MeetupDate, x.IsCancelled });
         modelBuilder.Entity<InterestGatheringAttendance>().HasKey(x => new { x.GatheringId, x.TelegramUserId });
         modelBuilder.Entity<InterestGatheringAttendance>().HasIndex(x => x.TelegramUserId);
+        modelBuilder.Entity<InterestGatheringNotification>().HasKey(x => new { x.GatheringId, x.TelegramUserId });
+        modelBuilder.Entity<InterestGatheringNotification>().HasIndex(x => new { x.TelegramUserId, x.ReadAt });
         modelBuilder.Entity<TicketCheckIn>().HasKey(x => x.Id);
         modelBuilder.Entity<TicketCheckIn>().HasIndex(x => x.TicketId).IsUnique();
         modelBuilder.Entity<Ticket>().HasOne(x => x.CheckIn).WithOne().HasForeignKey<TicketCheckIn>(x => x.TicketId);
