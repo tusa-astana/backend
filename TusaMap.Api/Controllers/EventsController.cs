@@ -35,7 +35,7 @@ public class EventsController : ControllerBase
         var todayInAstana = DateOnly.FromDateTime(DateTime.UtcNow.AddHours(5));
         var list = _store.GetAll()
             .Where(eventItem => DateOnly.TryParseExact(eventItem.Date, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var eventDate)
-                && eventDate >= todayInAstana)
+                && IsVisibleInUpcomingList(eventItem, eventDate, todayInAstana))
             .OrderByDescending(eventItem => eventItem.FeaturedUntilUtc is { } featuredUntil && featuredUntil > DateTime.UtcNow)
             .ThenBy(eventItem => eventItem.Date)
             .ToList();
@@ -55,10 +55,27 @@ public class EventsController : ControllerBase
         return Ok(list);
     }
 
+    [HttpGet("history")]
+    public ActionResult<IEnumerable<EventItem>> GetHistory()
+    {
+        var todayInAstana = DateOnly.FromDateTime(DateTime.UtcNow.AddHours(5));
+        var list = _store.GetAll()
+            .Where(eventItem => DateOnly.TryParseExact(eventItem.Date, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var eventDate)
+                && eventDate < todayInAstana)
+            .OrderByDescending(eventItem => eventItem.Date)
+            .ToList();
+        foreach (var eventItem in list)
+        {
+            SetTicketSalesAvailability(eventItem);
+            RemovePrivateOrganizerContacts(eventItem);
+        }
+        return Ok(list);
+    }
+
     [HttpGet("{id}")]
     public ActionResult<EventItem> GetById(string id)
     {
-        var e = _store.GetById(id);
+        var e = GetPubliclyAvailableEvent(id);
         if (e == null)
             return NotFound();
         SetTicketSalesAvailability(e);
@@ -69,7 +86,7 @@ public class EventsController : ControllerBase
     [HttpGet("{id}/going")]
     public ActionResult<EventGoingResponse> GetGoing(string id, [FromHeader(Name = "X-Telegram-Init-Data")] string? initData)
     {
-        if (_store.GetById(id) is null) return NotFound();
+        if (GetPubliclyAvailableEvent(id) is null) return NotFound();
         var user = _telegramAuth.ValidateInitData(initData);
         var goingCount = _db.EventParticipations.Count(x => x.EventId == id);
         var userGoing = user is not null && _db.EventParticipations.Any(x => x.EventId == id && x.TelegramUserId == user.Id);
@@ -82,7 +99,7 @@ public class EventsController : ControllerBase
     {
         var user = _telegramAuth.ValidateInitData(initData);
         if (user is null) return Unauthorized("Откройте TUSA из Telegram, чтобы отметить участие.");
-        var eventItem = _store.GetById(id);
+        var eventItem = GetPubliclyAvailableEvent(id);
         if (eventItem is null) return NotFound();
         if (eventItem.IsDemo) return BadRequest("Для демонстрационных событий отметка участия отключена.");
 
@@ -131,6 +148,8 @@ public class EventsController : ControllerBase
             Category = req.Category ?? "концерт",
             Price = req.Price,
             ImageUrl = req.ImageUrl ?? "",
+            IsPublicEvent = req.IsPublicEvent,
+            TelegramSourceUrl = req.TelegramSourceUrl.Trim(),
             TicketUrl = req.TicketUrl ?? "",
             TicketSellerName = req.TicketSellerName ?? "",
             OrganizerName = req.OrganizerName ?? ""
@@ -143,6 +162,21 @@ public class EventsController : ControllerBase
         return CreatedAtAction(nameof(GetById), new { id = created.Id }, created);
     }
 
+    private static bool IsVisibleInUpcomingList(EventItem eventItem, DateOnly eventDate, DateOnly today)
+        => eventDate >= today && (!IsTelegramSourced(eventItem) || eventDate == today);
+
+    private static bool IsTelegramSourced(EventItem eventItem)
+        => eventItem.IsPublicEvent && !string.IsNullOrWhiteSpace(eventItem.TelegramSourceUrl);
+
+    private EventItem? GetPubliclyAvailableEvent(string id)
+    {
+        var eventItem = _store.GetById(id);
+        if (eventItem is null || !IsTelegramSourced(eventItem)) return eventItem;
+        var todayInAstana = DateOnly.FromDateTime(DateTime.UtcNow.AddHours(5));
+        return DateOnly.TryParseExact(eventItem.Date, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var eventDate)
+            && eventDate <= todayInAstana ? eventItem : null;
+    }
+
     private void SetTicketSalesAvailability(EventItem eventItem)
     {
         eventItem.TicketSalesEnabled = false;
@@ -153,6 +187,30 @@ public class EventsController : ControllerBase
         eventItem.OrganizerEmail = "";
         eventItem.OrganizerPhone = "";
         eventItem.OrganizerTelegramId = 0;
+    }
+
+    public static bool IsValidTelegramSourceUrl(string? value)
+    {
+        if (!Uri.TryCreate(value, UriKind.Absolute, out var uri) ||
+            uri.Scheme != Uri.UriSchemeHttps ||
+            !uri.IsDefaultPort ||
+            !string.Equals(uri.Host, "t.me", StringComparison.OrdinalIgnoreCase) ||
+            !string.IsNullOrEmpty(uri.UserInfo) ||
+            uri.Fragment.Length > 0 ||
+            (uri.Query.Length > 0 && uri.Query != "?single") ||
+            uri.AbsolutePath.Contains('%'))
+            return false;
+
+        var segments = uri.AbsolutePath.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        if (segments.Length != 2 || uri.AbsolutePath != $"/{segments[0]}/{segments[1]}") return false;
+        var channel = segments[0];
+        var postId = segments[1];
+        return channel.Length is >= 5 and <= 32 &&
+               char.IsAsciiLetter(channel[0]) &&
+               channel.All(character => char.IsAsciiLetterOrDigit(character) || character == '_') &&
+               postId.Length > 0 && postId.All(char.IsAsciiDigit) &&
+               long.TryParse(postId, NumberStyles.None, CultureInfo.InvariantCulture, out var numericPostId) &&
+               numericPostId > 0;
     }
 
     [HttpGet("pending")]
@@ -207,6 +265,9 @@ public class CreateEventRequest : IValidatableObject
     [Range(0, 100000000)]
     public decimal? Price { get; set; }
     public string? ImageUrl { get; set; }
+    public bool IsPublicEvent { get; set; }
+    [Required, StringLength(500)]
+    public string TelegramSourceUrl { get; set; } = "";
     [StringLength(500)]
     public string? TicketUrl { get; set; }
     [StringLength(100)]
@@ -218,6 +279,10 @@ public class CreateEventRequest : IValidatableObject
     public string? OrganizerPhone { get; set; }
     public IEnumerable<ValidationResult> Validate(ValidationContext validationContext)
     {
+        if (!IsPublicEvent)
+            yield return new ValidationResult("Подтвердите, что событие является публичным.", [nameof(IsPublicEvent)]);
+        if (!EventsController.IsValidTelegramSourceUrl(TelegramSourceUrl))
+            yield return new ValidationResult("Укажите HTTPS-ссылку на публичный пост канала Telegram в формате t.me/channel/postId.", [nameof(TelegramSourceUrl)]);
         if (!string.IsNullOrWhiteSpace(TicketUrl) &&
             (!Uri.TryCreate(TicketUrl, UriKind.Absolute, out var ticketUri) ||
              ticketUri.Scheme != Uri.UriSchemeHttps || !string.IsNullOrEmpty(ticketUri.UserInfo)))

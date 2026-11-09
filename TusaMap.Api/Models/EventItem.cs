@@ -22,6 +22,8 @@ public class EventItem
     public string Category { get; set; } = "";
     public decimal? Price { get; set; }
     public string ImageUrl { get; set; } = "";
+    public bool IsPublicEvent { get; set; }
+    public string TelegramSourceUrl { get; set; } = "";
     public string TicketUrl { get; set; } = "";
     public string TicketSellerName { get; set; } = "";
     public string OrganizerName { get; set; } = "";

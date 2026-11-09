@@ -93,7 +93,7 @@ public class TelegramBotService : ITelegramBotService
             string.IsNullOrWhiteSpace(eventItem.OrganizerPhone) ? null : $"Телефон: {eventItem.OrganizerPhone}",
             eventItem.OrganizerTelegramId == 0 ? null : $"Telegram ID: {eventItem.OrganizerTelegramId}",
         }.Where(value => value is not null));
-        var text = $"Новая заявка на событие\n\n{eventItem.Title}\n{eventItem.Date} · {eventItem.Time} · {eventItem.Place}\n{eventItem.Category} · {(eventItem.Price is null or 0 ? "бесплатно" : $"{eventItem.Price:N0} ₸")}\nID: {eventItem.Id}" +
+        var text = $"Новая заявка на событие\n\n{eventItem.Title}\n{eventItem.Date} · {eventItem.Time} · {eventItem.Place}\n{eventItem.Category} · {(eventItem.Price is null or 0 ? "бесплатно" : $"{eventItem.Price:N0} ₸")}\nПубличное событие: {(eventItem.IsPublicEvent ? "да" : "нет")}\nИсточник: {eventItem.TelegramSourceUrl}\nID: {eventItem.Id}" +
                    (string.IsNullOrWhiteSpace(contact) ? "" : $"\n\n{contact}") + reviewUrl;
         return NotifyAdminsAsync(text, cancellationToken);
     }

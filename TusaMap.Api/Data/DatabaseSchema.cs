@@ -154,6 +154,8 @@ public static class DatabaseSchema
         AddColumnIfMissing(db, "Events", "AddressRevealAt", "TEXT NULL");
         AddColumnIfMissing(db, "Events", "PrivateAddress", "TEXT NOT NULL DEFAULT ''");
         AddColumnIfMissing(db, "Events", "IsDemo", "INTEGER NOT NULL DEFAULT 0");
+        AddColumnIfMissing(db, "Events", "IsPublicEvent", "INTEGER NOT NULL DEFAULT 0");
+        AddColumnIfMissing(db, "Events", "TelegramSourceUrl", "TEXT NOT NULL DEFAULT ''");
         AddColumnIfMissing(db, "Events", "TicketUrl", "TEXT NOT NULL DEFAULT ''");
         AddColumnIfMissing(db, "Events", "TicketSellerName", "TEXT NOT NULL DEFAULT ''");
         AddColumnIfMissing(db, "Events", "FeaturedUntilUtc", "TEXT NULL");
@@ -254,6 +256,8 @@ public static class DatabaseSchema
         db.Database.ExecuteSqlRaw("ALTER TABLE \"Events\" ADD COLUMN IF NOT EXISTS \"AddressRevealAt\" TIMESTAMPTZ NULL");
         db.Database.ExecuteSqlRaw("ALTER TABLE \"Events\" ADD COLUMN IF NOT EXISTS \"PrivateAddress\" TEXT NOT NULL DEFAULT ''");
         db.Database.ExecuteSqlRaw("ALTER TABLE \"Events\" ADD COLUMN IF NOT EXISTS \"IsDemo\" BOOLEAN NOT NULL DEFAULT FALSE");
+        db.Database.ExecuteSqlRaw("ALTER TABLE \"Events\" ADD COLUMN IF NOT EXISTS \"IsPublicEvent\" BOOLEAN NOT NULL DEFAULT FALSE");
+        db.Database.ExecuteSqlRaw("ALTER TABLE \"Events\" ADD COLUMN IF NOT EXISTS \"TelegramSourceUrl\" TEXT NOT NULL DEFAULT ''");
         db.Database.ExecuteSqlRaw("ALTER TABLE \"FunnelEvents\" ADD COLUMN IF NOT EXISTS \"VisitorId\" TEXT NULL");
         db.Database.ExecuteSqlRaw("CREATE INDEX IF NOT EXISTS \"IX_FunnelEvents_CreatedAt\" ON \"FunnelEvents\" (\"CreatedAt\")");
         db.Database.ExecuteSqlRaw("CREATE TABLE IF NOT EXISTS \"EventInterests\" (\"EventId\" TEXT NOT NULL, \"TelegramUserId\" BIGINT NOT NULL, \"CreatedAt\" TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY (\"EventId\", \"TelegramUserId\"))");
