@@ -22,12 +22,17 @@ public class EventItem
     public string Category { get; set; } = "";
     public decimal? Price { get; set; }
     public string ImageUrl { get; set; } = "";
+    public string TicketUrl { get; set; } = "";
+    public string TicketSellerName { get; set; } = "";
     public string OrganizerName { get; set; } = "";
     public string OrganizerEmail { get; set; } = "";
     public string OrganizerPhone { get; set; } = "";
     public long OrganizerTelegramId { get; set; }
     public string Status { get; set; } = "pending";
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+    public DateTime? FeaturedUntilUtc { get; set; }
+    [NotMapped]
+    public bool Featured => FeaturedUntilUtc > DateTime.UtcNow;
     public List<TicketCategory> TicketCategories { get; set; } = [];
     [NotMapped]
     public bool TicketSalesEnabled { get; set; }

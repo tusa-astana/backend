@@ -45,6 +45,11 @@ public static class DatabaseSchema
                 CreatedAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
             )
             """);
+        CreateTable(db, "AdminDailyReportRuns", """
+            CREATE TABLE IF NOT EXISTS AdminDailyReportRuns (
+                ReportDate TEXT NOT NULL PRIMARY KEY, SentAtUtc TEXT NOT NULL
+            )
+            """);
         CreateTable(db, "EventInterests", """
             CREATE TABLE IF NOT EXISTS EventInterests (
                 EventId TEXT NOT NULL, TelegramUserId INTEGER NOT NULL,
@@ -107,6 +112,15 @@ public static class DatabaseSchema
                 LastTelegramChargeId TEXT NULL, TermsAcceptedAt TEXT NULL, TermsVersion TEXT NULL
             )
             """);
+        CreateTable(db, "EventPromotions", """
+            CREATE TABLE IF NOT EXISTS EventPromotions (
+                Id TEXT NOT NULL PRIMARY KEY, EventId TEXT NOT NULL UNIQUE,
+                OrganizerTelegramId INTEGER NOT NULL, StarsAmount INTEGER NOT NULL,
+                Status TEXT NOT NULL DEFAULT 'pending', TermsAcceptedAt TEXT NOT NULL,
+                TermsVersion TEXT NOT NULL, TelegramPaymentChargeId TEXT NULL UNIQUE,
+                CreatedAt TEXT NOT NULL, ActivatedAt TEXT NULL, ExpiresAt TEXT NULL
+            )
+            """);
         CreateTable(db, "TicketCheckIns", """
             CREATE TABLE IF NOT EXISTS TicketCheckIns (
                 Id TEXT NOT NULL PRIMARY KEY, TicketId TEXT NOT NULL,
@@ -131,6 +145,9 @@ public static class DatabaseSchema
         AddColumnIfMissing(db, "Events", "AddressRevealAt", "TEXT NULL");
         AddColumnIfMissing(db, "Events", "PrivateAddress", "TEXT NOT NULL DEFAULT ''");
         AddColumnIfMissing(db, "Events", "IsDemo", "INTEGER NOT NULL DEFAULT 0");
+        AddColumnIfMissing(db, "Events", "TicketUrl", "TEXT NOT NULL DEFAULT ''");
+        AddColumnIfMissing(db, "Events", "TicketSellerName", "TEXT NOT NULL DEFAULT ''");
+        AddColumnIfMissing(db, "Events", "FeaturedUntilUtc", "TEXT NULL");
         AddColumnIfMissing(db, "Users", "PhotoUrl", "TEXT NULL");
         AddColumnIfMissing(db, "Users", "IsSuspended", "INTEGER NOT NULL DEFAULT 0");
         AddColumnIfMissing(db, "Users", "SuspendedAt", "TEXT NULL");
@@ -161,8 +178,11 @@ public static class DatabaseSchema
         AddColumnIfMissing(db, "EventInterests", "TicketAvailabilityNotifiedAt", "TEXT NULL");
 
         db.Database.ExecuteSqlRaw("CREATE UNIQUE INDEX IF NOT EXISTS IX_PromoCodes_Code ON PromoCodes (Code)");
+        db.Database.ExecuteSqlRaw("CREATE UNIQUE INDEX IF NOT EXISTS IX_EventPromotions_EventId ON EventPromotions (EventId)");
+        db.Database.ExecuteSqlRaw("CREATE UNIQUE INDEX IF NOT EXISTS IX_EventPromotions_TelegramPaymentChargeId ON EventPromotions (TelegramPaymentChargeId)");
         db.Database.ExecuteSqlRaw("CREATE INDEX IF NOT EXISTS IX_PromoRedemptions_Code_User ON PromoRedemptions (PromoCodeId, TelegramUserId)");
         db.Database.ExecuteSqlRaw("CREATE INDEX IF NOT EXISTS IX_FunnelEvents_Name_Event_Ref ON FunnelEvents (Name, EventId, Ref)");
+        db.Database.ExecuteSqlRaw("CREATE INDEX IF NOT EXISTS IX_FunnelEvents_CreatedAt ON FunnelEvents (CreatedAt)");
         db.Database.ExecuteSqlRaw("CREATE UNIQUE INDEX IF NOT EXISTS IX_TicketCheckIns_TicketId ON TicketCheckIns (TicketId)");
         db.Database.ExecuteSqlRaw("CREATE UNIQUE INDEX IF NOT EXISTS IX_BotMessageLogs_UpdateId ON BotMessageLogs (UpdateId)");
         db.Database.ExecuteSqlRaw("CREATE INDEX IF NOT EXISTS IX_EventInterests_EventId ON EventInterests (EventId)");
@@ -180,6 +200,11 @@ public static class DatabaseSchema
 
     private static void EnsurePostgresCompatible(TusaMapDbContext db)
     {
+        db.Database.ExecuteSqlRaw("CREATE TABLE IF NOT EXISTS \"AdminDailyReportRuns\" (\"ReportDate\" TEXT PRIMARY KEY, \"SentAtUtc\" TIMESTAMPTZ NOT NULL)");
+        db.Database.ExecuteSqlRaw("ALTER TABLE \"Events\" ADD COLUMN IF NOT EXISTS \"TicketUrl\" TEXT NOT NULL DEFAULT ''");
+        db.Database.ExecuteSqlRaw("ALTER TABLE \"Events\" ADD COLUMN IF NOT EXISTS \"TicketSellerName\" TEXT NOT NULL DEFAULT ''");
+        db.Database.ExecuteSqlRaw("ALTER TABLE \"Events\" ADD COLUMN IF NOT EXISTS \"FeaturedUntilUtc\" TIMESTAMPTZ NULL");
+        db.Database.ExecuteSqlRaw("CREATE TABLE IF NOT EXISTS \"EventPromotions\" (\"Id\" TEXT PRIMARY KEY, \"EventId\" TEXT NOT NULL UNIQUE, \"OrganizerTelegramId\" BIGINT NOT NULL, \"StarsAmount\" INTEGER NOT NULL, \"Status\" TEXT NOT NULL DEFAULT 'pending', \"TermsAcceptedAt\" TIMESTAMPTZ NOT NULL, \"TermsVersion\" TEXT NOT NULL, \"TelegramPaymentChargeId\" TEXT NULL UNIQUE, \"CreatedAt\" TIMESTAMPTZ NOT NULL, \"ActivatedAt\" TIMESTAMPTZ NULL, \"ExpiresAt\" TIMESTAMPTZ NULL)");
         db.Database.ExecuteSqlRaw("""
             CREATE TABLE IF NOT EXISTS "OrganizerSubscriptions" (
                 "TelegramUserId" BIGINT PRIMARY KEY,
@@ -216,6 +241,7 @@ public static class DatabaseSchema
         db.Database.ExecuteSqlRaw("ALTER TABLE \"Events\" ADD COLUMN IF NOT EXISTS \"PrivateAddress\" TEXT NOT NULL DEFAULT ''");
         db.Database.ExecuteSqlRaw("ALTER TABLE \"Events\" ADD COLUMN IF NOT EXISTS \"IsDemo\" BOOLEAN NOT NULL DEFAULT FALSE");
         db.Database.ExecuteSqlRaw("ALTER TABLE \"FunnelEvents\" ADD COLUMN IF NOT EXISTS \"VisitorId\" TEXT NULL");
+        db.Database.ExecuteSqlRaw("CREATE INDEX IF NOT EXISTS \"IX_FunnelEvents_CreatedAt\" ON \"FunnelEvents\" (\"CreatedAt\")");
         db.Database.ExecuteSqlRaw("CREATE TABLE IF NOT EXISTS \"EventInterests\" (\"EventId\" TEXT NOT NULL, \"TelegramUserId\" BIGINT NOT NULL, \"CreatedAt\" TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY (\"EventId\", \"TelegramUserId\"))");
         db.Database.ExecuteSqlRaw("CREATE INDEX IF NOT EXISTS \"IX_EventInterests_EventId\" ON \"EventInterests\" (\"EventId\")");
         db.Database.ExecuteSqlRaw("ALTER TABLE \"EventInterests\" ADD COLUMN IF NOT EXISTS \"TicketAvailabilityNotifiedAt\" TIMESTAMPTZ NULL");

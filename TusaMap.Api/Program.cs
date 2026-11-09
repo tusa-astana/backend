@@ -87,6 +87,7 @@ builder.Services.AddSingleton<ITelegramAuthService, TelegramAuthService>();
 builder.Services.AddScoped<ITelegramBotService, TelegramBotService>();
 builder.Services.AddHostedService<PrivateVenueNotifier>();
 builder.Services.AddHostedService<PendingTelegramTicketCleanupService>();
+builder.Services.AddHostedService<DailyAnalyticsReportWorker>();
 
 var allowedCorsOrigins = builder.Configuration.GetSection("Cors:Origins").Get<string[]>() ?? [];
 if (builder.Environment.IsDevelopment())

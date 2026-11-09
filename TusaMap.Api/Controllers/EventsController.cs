@@ -36,6 +36,8 @@ public class EventsController : ControllerBase
         var list = _store.GetAll()
             .Where(eventItem => DateOnly.TryParseExact(eventItem.Date, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var eventDate)
                 && eventDate >= todayInAstana)
+            .OrderByDescending(eventItem => eventItem.FeaturedUntilUtc is { } featuredUntil && featuredUntil > DateTime.UtcNow)
+            .ThenBy(eventItem => eventItem.Date)
             .ToList();
         if (!string.IsNullOrEmpty(category))
             list = list.Where(e => string.Equals(e.Category, category, StringComparison.OrdinalIgnoreCase)).ToList();
@@ -129,6 +131,8 @@ public class EventsController : ControllerBase
             Category = req.Category ?? "концерт",
             Price = req.Price,
             ImageUrl = req.ImageUrl ?? "",
+            TicketUrl = req.TicketUrl ?? "",
+            TicketSellerName = req.TicketSellerName ?? "",
             OrganizerName = req.OrganizerName ?? ""
             ,OrganizerEmail = req.OrganizerEmail ?? ""
             ,OrganizerPhone = req.OrganizerPhone ?? ""
@@ -203,6 +207,10 @@ public class CreateEventRequest : IValidatableObject
     [Range(0, 100000000)]
     public decimal? Price { get; set; }
     public string? ImageUrl { get; set; }
+    [StringLength(500)]
+    public string? TicketUrl { get; set; }
+    [StringLength(100)]
+    public string? TicketSellerName { get; set; }
     public string? OrganizerName { get; set; }
     [EmailAddress, StringLength(254)]
     public string? OrganizerEmail { get; set; }
@@ -210,6 +218,14 @@ public class CreateEventRequest : IValidatableObject
     public string? OrganizerPhone { get; set; }
     public IEnumerable<ValidationResult> Validate(ValidationContext validationContext)
     {
+        if (!string.IsNullOrWhiteSpace(TicketUrl) &&
+            (!Uri.TryCreate(TicketUrl, UriKind.Absolute, out var ticketUri) ||
+             ticketUri.Scheme != Uri.UriSchemeHttps || !string.IsNullOrEmpty(ticketUri.UserInfo)))
+            yield return new ValidationResult("TicketUrl must be an HTTPS URL without embedded credentials.", [nameof(TicketUrl)]);
+        if (!string.IsNullOrWhiteSpace(TicketUrl) && string.IsNullOrWhiteSpace(TicketSellerName))
+            yield return new ValidationResult("TicketSellerName is required when a ticket URL is provided.", [nameof(TicketSellerName)]);
+        if (string.IsNullOrWhiteSpace(TicketUrl) && !string.IsNullOrWhiteSpace(TicketSellerName))
+            yield return new ValidationResult("TicketSellerName requires a ticket URL.", [nameof(TicketUrl)]);
         if (string.IsNullOrWhiteSpace(OrganizerEmail) && string.IsNullOrWhiteSpace(OrganizerPhone))
             yield return new ValidationResult("Укажите email или телефон, чтобы TUSA могла связаться по заявке.", [nameof(OrganizerEmail), nameof(OrganizerPhone)]);
     }

@@ -64,6 +64,11 @@ dotnet run --project .\TusaMap.Api\TusaMap.Api.csproj
 - `GET /api/events` — список мероприятий (query: `category`)
 - `GET /api/events/{id}` — мероприятие по id
 - `GET /api/events/{id}/going` — число отметок участия и состояние текущего пользователя
+- `GET /api/analytics/summary` — сводные счётчики действий воронки, только для администратора с проверенным Telegram `initData`
+- `GET /api/analytics/summary/daily` — действия по дням за последние 7 календарных дней Астаны; это counts действий, не уникальные пользователи и не посещаемость; доступ только администратору
+- `GET /api/analytics/summary/insights?days=7|30|90` — админская сводка за период: дневные ряды для графиков, категории по открытиям, поисковые слова (только от 3 совпадений) и воронка промо. Поисковые слова состоят только из букв и не привязываются к Telegram ID.
+- `GET /api/analytics/summary/insights?days=7|30|90` — админская сводка за период: дневные ряды для графиков, категории по открытиям, поисковые слова (только от 3 совпадений) и воронка промо. Поисковые слова состоят только из букв и не привязываются к Telegram ID.
+- `GET /api/analytics/summary/meetup-density` и `/summary/meetup-campaigns` — агрегированные RSVP-планы и host-кампании, только для администратора
 - `POST /api/events/{id}/going` — переключить участие; требуется проверенный Telegram `initData`
 - `GET /api/organizer/engagement` — агрегированные открытия, shares и RSVP по своим одобренным событиям; требуется проверенный Telegram `initData`, admin видит все одобренные non-demo события
 - `POST /api/events/{id}/ticket-categories` и `/promo-codes` — legacy endpoints отвечают `410 Gone`; TUSA не управляет ticket inventory
@@ -81,7 +86,9 @@ dotnet run --project .\TusaMap.Api\TusaMap.Api.csproj
 - `/start event_tusa-2026` — сообщает, что TUSA не продаёт офлайн-билеты и не принимает оплату за вход.
 - `/start subscribe_pro` — показывает условия и создаёт Stars invoice Organizer Pro, только если настроена цена `Payments__TelegramSubscriptionStars`.
 - `/organizerpro` — показать условия и приобрести/продлить Organizer Pro за Stars, если цена настроена.
+- `GET /api/events/{id}/promotion/offer`, `POST /api/events/{id}/promotion/invoice`, `POST /api/events/{id}/promotion/cancel` — владелец одобренного события может получить условия/счёт/отменить незавершённый счёт для рекламного размещения; внешний продавец и HTTPS URL обязательны. Цена по умолчанию 500 XTR, флаг по умолчанию выключен.
 - `/refundstars <Telegram_ID>` — admin-only возврат последней Organizer Pro оплаты через Telegram Stars API.
+- `/refundpromotion <Campaign_ID>` — admin-only возврат оплаченной кампании продвижения; campaign ID приходит администраторам в уведомлении об оплате.
 
 После отправки заявки администраторы получают Telegram-уведомление (если заданы bot token и `Telegram:AdminUserIds`). Очередь доступна в Mini App: `/admin/event-review`. Решения разрешены только аккаунтам из серверного allowlist; повторно обработать уже закрытую заявку нельзя.
 
@@ -103,6 +110,10 @@ dotnet run --project .\TusaMap.Api\TusaMap.Api.csproj
 - `Telegram__AdminUserIds__0` — Telegram ID администратора;
 - `Payments__OrganizerProEnabled` — keep `false` until the digital benefits and full support/refund flow are implemented and verified.
 - `Payments__TelegramSubscriptionStars` — Stars price for the 30-day digital Organizer Pro service; keep `0` until its benefits, terms, support, and refund cycle are approved and tested. Both this price and the feature flag must be enabled for checkout.
+- `Payments__EventPromotionEnabled` — держать `false`, пока не проверены условия, поддержка/возвраты и Telegram test-cycle. `Payments__EventPromotionStars` — предложенная цена `500 XTR` за одобренное промо одного события до его даты; эквивалент USD не гарантируется.
+- `Analytics__DailyReportEnabled` и `Analytics__DailyReportTimeAstana` — ежедневный агрегированный отчёт администраторам Telegram (по умолчанию 20:00 Астана). Нужны bot token и `Telegram:AdminUserIds`; графики и фильтр периода доступны отдельно в `/admin/analytics`.
+- `Payments__EventPromotionEnabled` — держать `false`, пока не проверены условия, поддержка/возвраты и Telegram test-cycle. `Payments__EventPromotionStars` — предложенная цена `500 XTR` за одобренное промо одного события до его даты; эквивалент USD не гарантируется.
+- `Analytics__DailyReportEnabled` и `Analytics__DailyReportTimeAstana` — ежедневный агрегированный отчёт администраторам Telegram (по умолчанию 20:00 Астана). Нужны bot token и `Telegram:AdminUserIds`; графики и фильтр периода доступны отдельно в `/admin/analytics`.
 - `Telegram__WebhookSecret` — secret used when registering the Telegram webhook;
 - `Cors__Origins__0` — разрешённый frontend origin.
 

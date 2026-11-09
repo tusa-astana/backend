@@ -9,12 +9,14 @@ public class TusaMapDbContext : DbContext
 
     public DbSet<AppUser> Users => Set<AppUser>();
     public DbSet<OrganizerSubscription> OrganizerSubscriptions => Set<OrganizerSubscription>();
+    public DbSet<EventPromotion> EventPromotions => Set<EventPromotion>();
     public DbSet<EventItem> Events => Set<EventItem>();
     public DbSet<Ticket> Tickets => Set<Ticket>();
     public DbSet<TicketCategory> TicketCategories => Set<TicketCategory>();
     public DbSet<PromoCode> PromoCodes => Set<PromoCode>();
     public DbSet<PromoRedemption> PromoRedemptions => Set<PromoRedemption>();
     public DbSet<FunnelEvent> FunnelEvents => Set<FunnelEvent>();
+    public DbSet<AdminDailyReportRun> AdminDailyReportRuns => Set<AdminDailyReportRun>();
     public DbSet<EventInterest> EventInterests => Set<EventInterest>();
     public DbSet<EventParticipation> EventParticipations => Set<EventParticipation>();
     public DbSet<MeetupAttendance> MeetupAttendances => Set<MeetupAttendance>();
@@ -29,6 +31,9 @@ public class TusaMapDbContext : DbContext
     {
         modelBuilder.Entity<AppUser>().HasKey(x => x.TelegramUserId);
         modelBuilder.Entity<OrganizerSubscription>().HasKey(x => x.TelegramUserId);
+        modelBuilder.Entity<EventPromotion>().HasKey(x => x.Id);
+        modelBuilder.Entity<EventPromotion>().HasIndex(x => x.EventId).IsUnique();
+        modelBuilder.Entity<EventPromotion>().HasIndex(x => x.TelegramPaymentChargeId).IsUnique();
         modelBuilder.Entity<EventItem>().Property(x => x.Price).HasPrecision(12, 2);
         modelBuilder.Entity<Ticket>().HasIndex(x => x.PaymentReference).IsUnique();
         modelBuilder.Entity<Ticket>().HasIndex(x => x.TelegramPaymentChargeId).IsUnique();
@@ -45,6 +50,8 @@ public class TusaMapDbContext : DbContext
         modelBuilder.Entity<PromoCode>().Property(x => x.Value).HasPrecision(12, 2);
         modelBuilder.Entity<PromoRedemption>().HasIndex(x => new { x.PromoCodeId, x.TelegramUserId });
         modelBuilder.Entity<FunnelEvent>().HasIndex(x => new { x.Name, x.EventId, x.Ref });
+        modelBuilder.Entity<FunnelEvent>().HasIndex(x => x.CreatedAt);
+        modelBuilder.Entity<AdminDailyReportRun>().HasKey(x => x.ReportDate);
         modelBuilder.Entity<EventInterest>().HasKey(x => new { x.EventId, x.TelegramUserId });
         modelBuilder.Entity<EventInterest>().HasIndex(x => new { x.EventId, x.TicketAvailabilityNotifiedAt });
         modelBuilder.Entity<EventParticipation>().HasKey(x => new { x.EventId, x.TelegramUserId });

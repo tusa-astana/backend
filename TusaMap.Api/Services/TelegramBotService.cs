@@ -9,6 +9,8 @@ public interface ITelegramBotService
     Task SendTicketAsync(Ticket ticket, CancellationToken cancellationToken = default);
     Task NotifyAdminsOfTicketSaleAsync(Ticket ticket, CancellationToken cancellationToken = default);
     Task NotifyAdminsOfSubscriptionAsync(long telegramUserId, int stars, CancellationToken cancellationToken = default);
+    Task NotifyAdminsOfEventPromotionAsync(long telegramUserId, string eventId, string campaignId, int stars, CancellationToken cancellationToken = default);
+    Task<bool> NotifyAdminsOfDailyAnalyticsAsync(string text, CancellationToken cancellationToken = default);
     Task NotifyAdminsOfEventSubmissionAsync(EventItem eventItem, CancellationToken cancellationToken = default);
     Task NotifyOrganizerOfEventReviewAsync(EventItem eventItem, bool approved, CancellationToken cancellationToken = default);
     Task<bool> NotifyTicketAvailabilityAsync(long telegramUserId, string eventTitle, string eventUrl, CancellationToken cancellationToken = default);
@@ -51,6 +53,33 @@ public class TelegramBotService : ITelegramBotService
 
     public Task NotifyAdminsOfSubscriptionAsync(long telegramUserId, int stars, CancellationToken cancellationToken = default)
         => NotifyAdminsAsync($"Новая оплата Organizer Pro\nTelegram ID: {telegramUserId}\nСумма: {stars} ⭐\nСрок: 30 дней", cancellationToken);
+
+    public Task NotifyAdminsOfEventPromotionAsync(long telegramUserId, string eventId, string campaignId, int stars, CancellationToken cancellationToken = default)
+        => NotifyAdminsAsync($"Оплачено продвижение события\nEvent ID: {eventId}\nCampaign ID: {campaignId}\nВозврат: /refundpromotion {campaignId}\nTelegram ID организатора: {telegramUserId}\nСумма: {stars} ⭐", cancellationToken);
+
+    public async Task<bool> NotifyAdminsOfDailyAnalyticsAsync(string text, CancellationToken cancellationToken = default)
+    {
+        var token = _configuration["Telegram:BotToken"];
+        var adminIds = _configuration.GetSection("Telegram:AdminUserIds").Get<long[]>() ?? [];
+        if (string.IsNullOrWhiteSpace(token) || adminIds.Length == 0) return false;
+        var delivered = false;
+        foreach (var adminId in adminIds.Distinct())
+        {
+            try
+            {
+                using var response = await _clients.CreateClient().PostAsJsonAsync(
+                    $"https://api.telegram.org/bot{token}/sendMessage",
+                    new { chat_id = adminId, text }, cancellationToken);
+                if (response.IsSuccessStatusCode) delivered = true;
+                else _logger.LogWarning("Daily analytics report failed for admin {AdminId}: {StatusCode}", adminId, response.StatusCode);
+            }
+            catch (HttpRequestException exception)
+            {
+                _logger.LogWarning(exception, "Daily analytics report transport failed for admin {AdminId}", adminId);
+            }
+        }
+        return delivered;
+    }
 
     public Task NotifyAdminsOfEventSubmissionAsync(EventItem eventItem, CancellationToken cancellationToken = default)
     {

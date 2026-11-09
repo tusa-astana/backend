@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Net.Http.Json;
+using System.Globalization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using TusaMap.Api.Data;
@@ -66,6 +67,8 @@ public class TelegramWebhookController : ControllerBase
         }
         else if (message?.From is not null && command.Equals("/refundstars", StringComparison.OrdinalIgnoreCase))
             await RefundLatestSubscriptionAsync(token, message, argument, cancellationToken);
+        else if (message?.From is not null && command.Equals("/refundpromotion", StringComparison.OrdinalIgnoreCase))
+            await RefundEventPromotionAsync(token, message, argument, cancellationToken);
         else if (message?.From is not null && text.Equals("/start paysupport", StringComparison.OrdinalIgnoreCase))
             await SendMessageAsync(token, message.Chat.Id, "Чтобы связаться с поддержкой, отправьте /paysupport и описание проблемы с номером заказа в одном сообщении.", cancellationToken);
         else if (message?.From is not null && text.Equals("/start terms", StringComparison.OrdinalIgnoreCase))
@@ -97,8 +100,21 @@ public class TelegramWebhookController : ControllerBase
         if (update.PreCheckoutQuery is not null)
         {
             var query = update.PreCheckoutQuery;
-            var valid = query.From is not null && IsValidInvoice(query.InvoicePayload, query.Currency, query.TotalAmount, query.From.Id);
-            if (valid && !query.InvoicePayload.StartsWith("subscription:", StringComparison.OrdinalIgnoreCase))
+            var valid = query.From is not null && (query.InvoicePayload.StartsWith("eventpromo:", StringComparison.OrdinalIgnoreCase)
+                ? await IsValidEventPromotionInvoiceAsync(query.InvoicePayload, query.Currency, query.TotalAmount, query.From.Id, cancellationToken)
+                : IsValidInvoice(query.InvoicePayload, query.Currency, query.TotalAmount, query.From.Id));
+            if (valid && query.InvoicePayload.StartsWith("eventpromo:", StringComparison.OrdinalIgnoreCase))
+            {
+                var promotionId = query.InvoicePayload["eventpromo:".Length..];
+                var promotion = await _db.EventPromotions.AsNoTracking().FirstOrDefaultAsync(item => item.Id == promotionId, cancellationToken);
+                if (promotion is not null)
+                {
+                    _db.FunnelEvents.Add(new FunnelEvent { Name = "promotion_pre_checkout", EventId = promotion.EventId });
+                    await _db.SaveChangesAsync(cancellationToken);
+                }
+            }
+            if (valid && !query.InvoicePayload.StartsWith("subscription:", StringComparison.OrdinalIgnoreCase) &&
+                !query.InvoicePayload.StartsWith("eventpromo:", StringComparison.OrdinalIgnoreCase))
             {
                 var ticket = _tickets.GetByPaymentReference(query.InvoicePayload);
                 if (ticket is not null)
@@ -108,9 +124,12 @@ public class TelegramWebhookController : ControllerBase
                     await _db.SaveChangesAsync(cancellationToken);
                 }
             }
+            var errorMessage = query.InvoicePayload.StartsWith("eventpromo:", StringComparison.OrdinalIgnoreCase)
+                ? "Продвижение недоступно или сумма/условия не совпадают. Счёт не подтверждён; оплата не выполнена."
+                : "Оплата офлайн-билетов в TUSA отключена. Для вопросов по уже оформленному заказу используйте /paysupport.";
             var answer = valid
                 ? new { pre_checkout_query_id = query.Id, ok = true, error_message = (string?)null }
-                : new { pre_checkout_query_id = query.Id, ok = false, error_message = (string?)"Оплата офлайн-билетов в TUSA отключена. Для вопросов по уже оформленному заказу используйте /paysupport." };
+                : new { pre_checkout_query_id = query.Id, ok = false, error_message = (string?)errorMessage };
             await _clients.CreateClient().PostAsJsonAsync(
                 $"https://api.telegram.org/bot{token}/answerPreCheckoutQuery",
                 answer, cancellationToken);
@@ -120,7 +139,12 @@ public class TelegramWebhookController : ControllerBase
         if (payment is not null)
         {
             var payerId = update.Message!.From?.Id ?? 0;
-            if (payment.InvoicePayload.StartsWith("subscription:", StringComparison.OrdinalIgnoreCase))
+            if (payment.InvoicePayload.StartsWith("eventpromo:", StringComparison.OrdinalIgnoreCase))
+            {
+                await ActivateEventPromotionAsync(token, update.Message.Chat.Id, payerId, payment.InvoicePayload,
+                    payment.Currency, payment.TotalAmount, payment.TelegramPaymentChargeId, cancellationToken);
+            }
+            else if (payment.InvoicePayload.StartsWith("subscription:", StringComparison.OrdinalIgnoreCase))
             {
                 if (IsValidInvoice(payment.InvoicePayload, payment.Currency, payment.TotalAmount, payerId))
                     await ActivateSubscriptionAsync(token, update.Message.Chat.Id, payment.InvoicePayload, payment.TelegramPaymentChargeId, cancellationToken);
@@ -199,7 +223,8 @@ public class TelegramWebhookController : ControllerBase
             termsUrl = $"{_configuration["Telegram:WebAppUrl"]?.TrimEnd('/')}/terms";
         var text = $"Условия TUSA\n\n" +
                    "TUSA помогает находить события и отмечать интерес, но не продаёт офлайн-билеты и не принимает оплату за вход. Отметка участия не является билетом или бронированием.\n\n" +
-                   "Organizer Pro — цифровая услуга внутри Telegram. Если подписка включена, оплатить её можно только Telegram Stars; цена и условия показываются до подтверждения. Поддержка и запросы на возврат — через /paysupport.\n\n" +
+                   "Цифровое промо события, если оно включено, оплачивается только Telegram Stars после показа цены и подтверждения условий. Оно не гарантирует охват, RSVP или продажу билетов; билеты продаёт указанный внешний дистрибьютор. Вопросы по оплате и возврату — через /paysupport.\n\n" +
+                   "Organizer Pro — отдельная цифровая услуга внутри Telegram. Если подписка включена, цена и условия показываются до оплаты; вопросы и возвраты — через /paysupport.\n\n" +
                    $"Полный текст: {termsUrl}";
         await SendMessageAsync(token, chatId, text, cancellationToken);
     }
@@ -333,6 +358,92 @@ public class TelegramWebhookController : ControllerBase
         await _db.SaveChangesAsync(cancellationToken);
         await SendMessageAsync(token, message.Chat.Id, $"Возврат последней оплаты Organizer Pro для пользователя {customerId} подтверждён Telegram.", cancellationToken);
         await SendMessageAsync(token, customerId, "Stars за последнюю оплату Organizer Pro возвращены. Подписка отключена. Если это не решило вопрос, ответьте сюда или используйте /paysupport.", cancellationToken);
+    }
+
+    private async Task RefundEventPromotionAsync(string token, TelegramMessage message, string argument, CancellationToken cancellationToken)
+    {
+        if (!_users.IsAdmin(message.From!.Id))
+        {
+            await SendMessageAsync(token, message.Chat.Id, "Эта команда доступна только администратору.", cancellationToken);
+            return;
+        }
+        var campaign = await _db.EventPromotions.FirstOrDefaultAsync(item => item.Id == argument && item.Status == "paid", cancellationToken);
+        if (campaign?.TelegramPaymentChargeId is not { Length: > 0 } chargeId)
+        {
+            await SendMessageAsync(token, message.Chat.Id, "Активная оплаченная кампания с таким ID не найдена.", cancellationToken);
+            return;
+        }
+        var refunded = await _telegramBot.RefundStarPaymentAsync(campaign.OrganizerTelegramId, chargeId, cancellationToken);
+        if (!refunded)
+        {
+            await SendMessageAsync(token, message.Chat.Id, "Telegram не подтвердил возврат. Проверьте /paysupport вручную.", cancellationToken);
+            return;
+        }
+        campaign.Status = "refunded";
+        var ev = await _db.Events.FirstOrDefaultAsync(item => item.Id == campaign.EventId, cancellationToken);
+        if (ev is not null && ev.FeaturedUntilUtc == campaign.ExpiresAt) ev.FeaturedUntilUtc = DateTime.UtcNow;
+        _db.FunnelEvents.Add(new FunnelEvent { Name = "promotion_refunded", EventId = campaign.EventId });
+        await _db.SaveChangesAsync(cancellationToken);
+        await SendMessageAsync(token, message.Chat.Id, $"Возврат промо-кампании {campaign.Id} подтверждён Telegram.", cancellationToken);
+        await SendMessageAsync(token, campaign.OrganizerTelegramId, "Оплата промо возвращена в Telegram Stars; выделенное размещение остановлено.", cancellationToken);
+    }
+
+    private async Task<bool> IsValidEventPromotionInvoiceAsync(string payload, string currency, int totalAmount, long payerId, CancellationToken cancellationToken)
+    {
+        if (!_configuration.GetValue("Payments:EventPromotionEnabled", false) || !string.Equals(currency, "XTR", StringComparison.Ordinal)) return false;
+        var parts = payload.Split(':', StringSplitOptions.TrimEntries);
+        if (parts.Length != 2 || parts[0] != "eventpromo") return false;
+        var campaign = await _db.EventPromotions.AsNoTracking().FirstOrDefaultAsync(item => item.Id == parts[1], cancellationToken);
+        if (campaign is null || campaign.Status != "pending" || campaign.OrganizerTelegramId != payerId ||
+            campaign.TermsAcceptedAt == default || campaign.TermsVersion != EventPromotionsController.TermsVersion ||
+            campaign.StarsAmount != _configuration.GetValue<int>("Payments:EventPromotionStars", 500) || totalAmount != campaign.StarsAmount) return false;
+        var ev = await _db.Events.AsNoTracking().FirstOrDefaultAsync(item => item.Id == campaign.EventId, cancellationToken);
+        return ev is not null && ev.Status == "approved" && !ev.IsDemo && !string.IsNullOrWhiteSpace(ev.TicketSellerName) &&
+               EventPromotionsController.IsValidTicketUrl(ev.TicketUrl) &&
+               DateOnly.TryParseExact(ev.Date, "yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture,
+                   System.Globalization.DateTimeStyles.None, out var eventDate) && eventDate >= DateOnly.FromDateTime(DateTime.UtcNow.AddHours(5));
+    }
+
+    private async Task ActivateEventPromotionAsync(string token, long chatId, long payerId, string payload, string currency,
+        int totalAmount, string chargeId, CancellationToken cancellationToken)
+    {
+        var parts = payload.Split(':', StringSplitOptions.TrimEntries);
+        var campaign = parts.Length == 2
+            ? await _db.EventPromotions.FirstOrDefaultAsync(item => item.Id == parts[1], cancellationToken)
+            : null;
+        if (campaign?.TelegramPaymentChargeId == chargeId && campaign.Status is "paid" or "refunded" or "refund_requested") return;
+        if (campaign is null || campaign.Status != "pending" ||
+            !await IsValidEventPromotionInvoiceAsync(payload, currency, totalAmount, payerId, cancellationToken))
+        {
+            var refunded = await _telegramBot.RefundStarPaymentAsync(payerId, chargeId, cancellationToken);
+            if (campaign is not null)
+            {
+                campaign.Status = refunded ? "refunded" : "refund_requested";
+                campaign.TelegramPaymentChargeId = chargeId;
+                if (refunded) _db.FunnelEvents.Add(new FunnelEvent { Name = "promotion_refunded", EventId = campaign.EventId });
+                await _db.SaveChangesAsync(cancellationToken);
+            }
+            if (!refunded)
+                await _telegramBot.NotifyAdminsOfPaymentSupportAsync(payerId, $"Некорректная или просроченная оплата промо; нужен возврат. Charge ID: {chargeId}.", cancellationToken);
+            await SendMessageAsync(token, chatId, refunded
+                ? "Срок или условия промо уже недоступны; платёж автоматически возвращён в Stars."
+                : "Не удалось подтвердить промо. Запрос на проверку/возврат передан в поддержку через /paysupport.", cancellationToken);
+            return;
+        }
+
+        var ev = await _db.Events.FirstOrDefaultAsync(item => item.Id == campaign.EventId, cancellationToken);
+        if (ev is null) return;
+        var eventDate = DateOnly.ParseExact(ev.Date, "yyyy-MM-dd", CultureInfo.InvariantCulture);
+        var expiresAt = eventDate.AddDays(1).ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc).AddHours(-5);
+        campaign.Status = "paid";
+        campaign.TelegramPaymentChargeId = chargeId;
+        campaign.ActivatedAt = DateTime.UtcNow;
+        campaign.ExpiresAt = expiresAt;
+        ev.FeaturedUntilUtc = expiresAt;
+        _db.FunnelEvents.Add(new FunnelEvent { Name = "promotion_paid", EventId = campaign.EventId });
+        await _db.SaveChangesAsync(cancellationToken);
+        await SendMessageAsync(token, chatId, "Stars-платёж подтверждён. Промо отмечено в TUSA до даты события; билеты продаёт указанный внешний дистрибьютор.", cancellationToken);
+        await _telegramBot.NotifyAdminsOfEventPromotionAsync(payerId, ev.Id, campaign.Id, totalAmount, cancellationToken);
     }
 
     private async Task StartSubscriptionPaymentAsync(string token, TelegramMessage message, CancellationToken cancellationToken)

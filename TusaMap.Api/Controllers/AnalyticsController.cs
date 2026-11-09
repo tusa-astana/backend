@@ -1,4 +1,5 @@
 using System.ComponentModel.DataAnnotations;
+using System.Text.RegularExpressions;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -14,7 +15,9 @@ public class AnalyticsController : ControllerBase
     private static readonly string[] AllowedEvents = [
         "catalog_view", "event_open", "event_share", "community_open", "meetup_share_intent", "meetup_invite_open",
         "community_gathering_share", "community_gathering_open", "community_gathering_rsvp",
+        "search_term", "category_filter", "promotion_invoice_cancelled", "ticket_seller_click",
     ];
+    private static readonly string[] AllowedCategories = ["концерт", "вечеринка", "развлечения"];
     private static readonly string[] AllowedCommunityRefs = ["rollmove-astana"];
     private static readonly string[] AllowedMeetupCampaigns = ["host-a", "host-b", "host-c"];
     private readonly TusaMapDbContext _db;
@@ -40,6 +43,23 @@ public class AnalyticsController : ControllerBase
         if (request.Name == "catalog_view" && request.EventId is not null)
             return BadRequest("Catalog views cannot target an event");
 
+        if (request.Name == "search_term" &&
+            (request.EventId is not null || !IsSafeSearchTerm(request.Ref)))
+            return BadRequest("Search analytics accepts one normalized word only");
+
+        if (request.Name == "category_filter" &&
+            (request.EventId is not null || request.Ref is null || !AllowedCategories.Contains(request.Ref, StringComparer.Ordinal)))
+            return BadRequest("Unknown category filter");
+
+        if (request.Name == "promotion_invoice_cancelled")
+        {
+            var promotionUser = _auth.ValidateInitData(initData);
+            if (promotionUser is null || string.IsNullOrWhiteSpace(request.EventId) ||
+                !_db.EventPromotions.Any(item => item.EventId == request.EventId && item.OrganizerTelegramId == promotionUser.Id && item.Status == "pending"))
+                return StatusCode(StatusCodes.Status403Forbidden);
+            request.Ref = null;
+        }
+
         if (request.Name == "community_open" &&
             (request.EventId is not null || string.IsNullOrWhiteSpace(request.Ref) ||
              !AllowedCommunityRefs.Contains(request.Ref, StringComparer.Ordinal)))
@@ -63,13 +83,23 @@ public class AnalyticsController : ControllerBase
             if (!eventExists) return NotFound();
         }
 
+        if (request.Name == "ticket_seller_click")
+        {
+            if (string.IsNullOrWhiteSpace(request.EventId)) return BadRequest("EventId is required");
+            var hasExternalSeller = _db.Events.AsNoTracking().Any(item =>
+                item.Id == request.EventId && item.Status == "approved" && !item.IsDemo && item.TicketUrl != "");
+            if (!hasExternalSeller) return NotFound();
+        }
+
+        if (request.Name == "search_term") request.Ref = request.Ref!.ToLowerInvariant();
+
         var user = _auth.ValidateInitData(initData);
         _db.FunnelEvents.Add(new Models.FunnelEvent
         {
             Name = request.Name,
             EventId = request.EventId,
             Ref = request.Ref,
-            TelegramUserId = isCommunityGatheringEvent ? null : user?.Id,
+            TelegramUserId = isCommunityGatheringEvent || request.Name is "search_term" or "category_filter" or "promotion_invoice_cancelled" or "ticket_seller_click" ? null : user?.Id,
         });
         _db.SaveChanges();
         return NoContent();
@@ -95,6 +125,97 @@ public class AnalyticsController : ControllerBase
         if (user is null || !_users.IsAdmin(user.Id)) return StatusCode(StatusCodes.Status403Forbidden);
         var summary = _db.FunnelEvents.AsNoTracking().GroupBy(x => x.Name).Select(group => new { name = group.Key, count = group.Count() }).ToList();
         return Ok(summary);
+    }
+
+    [HttpGet("summary/daily")]
+    public async Task<IActionResult> DailySummary(
+        [FromHeader(Name = "X-Telegram-Init-Data")] string? initData,
+        CancellationToken cancellationToken)
+    {
+        var user = _auth.ValidateInitData(initData);
+        if (user is null || !_users.IsAdmin(user.Id)) return StatusCode(StatusCodes.Status403Forbidden);
+
+        var todayAstana = DateOnly.FromDateTime(DateTime.UtcNow.AddHours(5));
+        var fromDate = todayAstana.AddDays(-6);
+        var fromUtc = fromDate.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc).AddHours(-5);
+        var throughUtc = fromUtc.AddDays(7);
+        var events = await _db.FunnelEvents.AsNoTracking()
+            .Where(item => item.CreatedAt >= fromUtc && item.CreatedAt < throughUtc)
+            .Select(item => new { item.Name, item.CreatedAt })
+            .ToListAsync(cancellationToken);
+
+        var rows = events
+            .GroupBy(item => new { Date = DateOnly.FromDateTime(item.CreatedAt.AddHours(5)), item.Name })
+            .Select(group => new DailyFunnelMetricResponse(
+                group.Key.Date.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture),
+                group.Key.Name,
+                group.Count()))
+            .OrderBy(item => item.Date)
+            .ThenBy(item => item.Name)
+            .ToArray();
+
+        return Ok(new DailyFunnelSummaryResponse(
+            fromDate.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture),
+            todayAstana.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture),
+            rows));
+    }
+
+    [HttpGet("summary/insights")]
+    public async Task<IActionResult> InsightsSummary(
+        [FromQuery] int days,
+        [FromHeader(Name = "X-Telegram-Init-Data")] string? initData,
+        CancellationToken cancellationToken)
+    {
+        var user = _auth.ValidateInitData(initData);
+        if (user is null || !_users.IsAdmin(user.Id)) return StatusCode(StatusCodes.Status403Forbidden);
+        if (days is not (7 or 30 or 90)) return BadRequest("Days must be 7, 30, or 90");
+
+        var throughDate = DateOnly.FromDateTime(DateTime.UtcNow.AddHours(5));
+        var fromDate = throughDate.AddDays(-(days - 1));
+        var fromUtc = fromDate.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc).AddHours(-5);
+        var throughUtc = fromUtc.AddDays(days);
+        var events = await _db.FunnelEvents.AsNoTracking()
+            .Where(item => item.CreatedAt >= fromUtc && item.CreatedAt < throughUtc)
+            .Select(item => new { item.Name, item.Ref, item.EventId, item.CreatedAt })
+            .ToListAsync(cancellationToken);
+
+        var daily = events
+            .GroupBy(item => new { Date = DateOnly.FromDateTime(item.CreatedAt.AddHours(5)), item.Name })
+            .Select(group => new DailyFunnelMetricResponse(
+                group.Key.Date.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture), group.Key.Name, group.Count()))
+            .OrderBy(item => item.Date).ThenBy(item => item.Name).ToArray();
+        var topSearchTerms = events
+            .Where(item => item.Name == "search_term" && IsSafeSearchTerm(item.Ref))
+            .GroupBy(item => item.Ref!)
+            .Select(group => new AnalyticsCountResponse(group.Key, group.Count()))
+            .Where(item => item.Count >= 3)
+            .OrderByDescending(item => item.Count).ThenBy(item => item.Name).Take(20).ToArray();
+
+        var openedEventIds = events.Where(item => item.Name == "event_open" && item.EventId is not null)
+            .Select(item => item.EventId!).Distinct().ToArray();
+        var categoryByEvent = await _db.Events.AsNoTracking()
+            .Where(item => openedEventIds.Contains(item.Id))
+            .Select(item => new { item.Id, item.Category })
+            .ToDictionaryAsync(item => item.Id, item => item.Category, cancellationToken);
+        var popularCategories = events
+            .Where(item => item.Name == "event_open" && item.EventId is not null && categoryByEvent.ContainsKey(item.EventId))
+            .GroupBy(item => categoryByEvent[item.EventId!])
+            .Select(group => new AnalyticsCountResponse(group.Key, group.Count()))
+            .OrderByDescending(item => item.Count).ThenBy(item => item.Name).ToArray();
+
+        var promotionFunnel = new PromotionAnalyticsResponse(
+            events.Count(item => item.Name == "promotion_offer_view"),
+            events.Count(item => item.Name == "promotion_invoice_created"),
+            events.Count(item => item.Name == "promotion_pre_checkout"),
+            events.Count(item => item.Name == "promotion_invoice_cancelled"),
+            events.Count(item => item.Name == "ticket_seller_click"),
+            events.Count(item => item.Name == "promotion_paid"),
+            events.Count(item => item.Name == "promotion_refunded"));
+
+        return Ok(new AnalyticsInsightsSummaryResponse(
+            fromDate.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture),
+            throughDate.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture),
+            daily, topSearchTerms, popularCategories, promotionFunnel));
     }
 
     [HttpGet("summary/meetup-density")]
@@ -187,6 +308,10 @@ public class AnalyticsController : ControllerBase
         return _db.InterestGatherings.AsNoTracking().Any(item =>
             item.Id == gatheringId && !item.IsCancelled && item.MeetupDate.CompareTo(today) >= 0);
     }
+
+    private static bool IsSafeSearchTerm(string? value)
+        => !string.IsNullOrWhiteSpace(value) && value.Length is >= 3 and <= 24 &&
+           Regex.IsMatch(value, @"\A\p{L}{3,24}\z", RegexOptions.CultureInvariant);
 }
 
 public class TrackEventRequest
@@ -204,3 +329,19 @@ public class TrackCommunityBeaconRequest
 public sealed record MeetupDensitySummaryResponse(string FromDate, string ThroughDate, IReadOnlyList<MeetupDensityPlanResponse> Plans);
 
 public sealed record MeetupDensityPlanResponse(string VenueId, string Venue, string Date, int RsvpCount);
+
+public sealed record DailyFunnelSummaryResponse(string FromDate, string ThroughDate, IReadOnlyList<DailyFunnelMetricResponse> Rows);
+
+public sealed record DailyFunnelMetricResponse(string Date, string Name, int Count);
+
+public sealed record AnalyticsCountResponse(string Name, int Count);
+
+public sealed record PromotionAnalyticsResponse(int OfferViews, int InvoiceStarts, int PreCheckout, int CancelledOrClosed, int TicketSellerClicks, int Paid, int Refunded);
+
+public sealed record AnalyticsInsightsSummaryResponse(
+    string FromDate,
+    string ThroughDate,
+    IReadOnlyList<DailyFunnelMetricResponse> Daily,
+    IReadOnlyList<AnalyticsCountResponse> TopSearchTerms,
+    IReadOnlyList<AnalyticsCountResponse> PopularCategories,
+    PromotionAnalyticsResponse PromotionFunnel);
