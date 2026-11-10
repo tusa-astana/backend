@@ -16,6 +16,25 @@ public sealed class EventSourceFeedWorker : BackgroundService
     private static readonly TimeSpan InitialDelay = TimeSpan.FromSeconds(15);
     private static readonly TimeSpan RecentPublishedWindow = TimeSpan.FromDays(120);
     private static readonly Regex HtmlTags = new("<[^>]+>", RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex RussianEventDate = new(
+        @"(?<!\d)(?<day>\d{1,2})(?:\s*[–—-]\s*\d{1,2})?\s+(?<month>января|февраля|марта|апреля|мая|июня|июля|августа|сентября|октября|ноября|декабря)(?:\s+(?<year>20\d{2}))?",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
+    private static readonly Regex EnglishEventDate = new(
+        @"\b(?<month>January|February|March|April|May|June|July|August|September|October|November|December)\s+(?<day>\d{1,2})(?:\s+(?:to|[-–—])\s*\d{1,2})?(?:,?\s*(?<year>20\d{2}))?\b",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
+    private static readonly Dictionary<string, int> RussianMonths = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["января"] = 1, ["февраля"] = 2, ["марта"] = 3, ["апреля"] = 4,
+        ["мая"] = 5, ["июня"] = 6, ["июля"] = 7, ["августа"] = 8,
+        ["сентября"] = 9, ["октября"] = 10, ["ноября"] = 11, ["декабря"] = 12,
+    };
+    private static readonly Dictionary<string, int> EnglishMonths = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["January"] = 1, ["February"] = 2, ["March"] = 3, ["April"] = 4,
+        ["May"] = 5, ["June"] = 6, ["July"] = 7, ["August"] = 8,
+        ["September"] = 9, ["October"] = 10, ["November"] = 11, ["December"] = 12,
+    };
+    private static readonly string[] DefaultEventKeywords = ["championship", "competition", "tournament", "cup", "schedule", "чемпионат", "соревн", "турнир", "кубок", "расписани"];
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly IHttpClientFactory _clients;
     private readonly IConfiguration _configuration;
@@ -70,12 +89,14 @@ public sealed class EventSourceFeedWorker : BackgroundService
                 using var scope = _scopeFactory.CreateScope();
                 var db = scope.ServiceProvider.GetRequiredService<TusaMapDbContext>();
                 var recentSince = DateTime.UtcNow.Subtract(RecentPublishedWindow);
+                var todayAstana = DateOnly.FromDateTime(DateTime.UtcNow.AddHours(5));
                 var eligible = items
                     .Where(item => item.PublishedAtUtc is null || item.PublishedAtUtc >= recentSince)
                     .Where(item => Uri.TryCreate(item.SourceUrl, UriKind.Absolute, out var itemUri) &&
                                    allowedHosts.Any(host => string.Equals(itemUri.Host, host, StringComparison.OrdinalIgnoreCase)))
-                    .Where(item => MentionsAstana(item.Title + " " + item.Summary))
-                    .Where(item => LooksLikeEventNotice(item.Title + " " + item.Summary))
+                    .Where(item => !source.RequireAstanaMention || MentionsAstana(item.Title + " " + item.Summary))
+                    .Where(item => LooksLikeEventNotice(item.Title + " " + item.Summary, source.EventKeywords))
+                    .Where(item => !source.RequireFutureEventDate || item.EventDate is { } eventDate && eventDate >= todayAstana)
                     .DistinctBy(item => item.ExternalId, StringComparer.Ordinal)
                     .Take(MaxItemsPerFeed)
                     .ToArray();
@@ -99,6 +120,7 @@ public sealed class EventSourceFeedWorker : BackgroundService
                         Title = item.Title,
                         Summary = item.Summary,
                         HobbyId = source.HobbyId,
+                        EventDate = item.EventDate,
                         PublishedAtUtc = item.PublishedAtUtc,
                     });
                 }
@@ -175,7 +197,40 @@ public sealed class EventSourceFeedWorker : BackgroundService
         DateTime? publishedAt = DateTimeOffset.TryParse(dateText, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var parsedDate)
             ? parsedDate.UtcDateTime
             : null;
-        return new ParsedFeedItem(externalId, linkUri.AbsoluteUri, title, description, publishedAt);
+        var eventDate = ExtractEventDate(title + " " + description, publishedAt);
+        return new ParsedFeedItem(externalId, linkUri.AbsoluteUri, title, description, eventDate, publishedAt);
+    }
+
+    private static DateOnly? ExtractEventDate(string text, DateTime? publishedAtUtc)
+    {
+        var match = RussianEventDate.Match(text);
+        var months = RussianMonths;
+        if (!match.Success)
+        {
+            match = EnglishEventDate.Match(text);
+            months = EnglishMonths;
+        }
+        if (!match.Success || !int.TryParse(match.Groups["day"].Value, CultureInfo.InvariantCulture, out var day)) return null;
+        var monthName = match.Groups["month"].Value.ToLowerInvariant();
+        if (!months.TryGetValue(monthName, out var month)) return null;
+        var publicationDateAstana = publishedAtUtc is { } publishedAt
+            ? DateOnly.FromDateTime(publishedAt.AddHours(5))
+            : (DateOnly?)null;
+        var hasExplicitYear = match.Groups["year"].Success && int.TryParse(match.Groups["year"].Value, CultureInfo.InvariantCulture, out _);
+        if (!hasExplicitYear && publicationDateAstana is null) return null;
+        var year = hasExplicitYear
+            ? int.Parse(match.Groups["year"].Value, CultureInfo.InvariantCulture)
+            : publicationDateAstana!.Value.Year;
+        try
+        {
+            var eventDate = new DateOnly(year, month, day);
+            if (!hasExplicitYear && eventDate <= publicationDateAstana!.Value) return null;
+            return eventDate;
+        }
+        catch (ArgumentOutOfRangeException)
+        {
+            return null;
+        }
     }
 
     private bool IsAllowedFeed(EventSourceFeedConfig source)
@@ -190,11 +245,9 @@ public sealed class EventSourceFeedWorker : BackgroundService
     private static bool MentionsAstana(string text)
         => text.Contains("Astana", StringComparison.OrdinalIgnoreCase) || text.Contains("Астана", StringComparison.OrdinalIgnoreCase);
 
-    private static bool LooksLikeEventNotice(string text)
-    {
-        string[] keywords = ["championship", "competition", "tournament", "cup", "schedule", "чемпионат", "соревн", "турнир", "кубок", "расписани"];
-        return keywords.Any(keyword => text.Contains(keyword, StringComparison.OrdinalIgnoreCase));
-    }
+    private static bool LooksLikeEventNotice(string text, string[]? configuredKeywords)
+        => (configuredKeywords is { Length: > 0 } ? configuredKeywords : DefaultEventKeywords)
+            .Any(keyword => text.Contains(keyword, StringComparison.OrdinalIgnoreCase));
 
     private static string CleanText(string? value, int maxLength)
     {
@@ -212,9 +265,12 @@ public sealed class EventSourceFeedWorker : BackgroundService
         public string FeedUrl { get; set; } = "";
         public string HobbyId { get; set; } = "";
         public string[]? AllowedHosts { get; set; }
+        public string[]? EventKeywords { get; set; }
+        public bool RequireAstanaMention { get; set; } = true;
+        public bool RequireFutureEventDate { get; set; }
     }
 
-    private sealed record ParsedFeedItem(string ExternalId, string SourceUrl, string Title, string Summary, DateTime? PublishedAtUtc);
+    private sealed record ParsedFeedItem(string ExternalId, string SourceUrl, string Title, string Summary, DateOnly? EventDate, DateTime? PublishedAtUtc);
 
     private sealed class LimitedReadStream : Stream
     {

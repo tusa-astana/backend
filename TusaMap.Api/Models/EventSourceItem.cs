@@ -10,6 +10,7 @@ public sealed class EventSourceItem
     public string Title { get; set; } = "";
     public string Summary { get; set; } = "";
     public string HobbyId { get; set; } = "";
+    public DateOnly? EventDate { get; set; }
     public DateTime? PublishedAtUtc { get; set; }
     public DateTime ImportedAtUtc { get; set; } = DateTime.UtcNow;
     public string Status { get; set; } = "pending";
