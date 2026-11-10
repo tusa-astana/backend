@@ -74,6 +74,13 @@ public sealed class AdminEventSourcesController(
         if (interests.Find(hobbyId) is null) return BadRequest("Выберите хобби из каталога TUSA.");
         var description = (request.Description ?? string.Empty).Trim();
         if (description.Length > 3000) return BadRequest("Описание не должно превышать 3000 символов.");
+        if (description.Length > 0 && !request.DescriptionPermissionConfirmed)
+            return BadRequest("Подтвердите право использовать это описание или очистите поле и напишите собственный текст.");
+        var imageUrl = request.ImageUrl?.Trim() ?? "";
+        if (!string.IsNullOrEmpty(imageUrl) && !request.ImagePermissionConfirmed)
+            return BadRequest("Подтвердите право на размещение выбранного изображения.");
+        if (!EventImageUrlValidator.IsSupported(imageUrl))
+            return BadRequest("Выберите WebP-обложку через загрузку или укажите прямую HTTPS-ссылку на изображение.");
 
         var eventItem = new EventItem
         {
@@ -89,7 +96,7 @@ public sealed class AdminEventSourcesController(
             SourceUrl = candidate.SourceUrl,
             SourceVerifiedAtUtc = DateTime.UtcNow,
             Price = null,
-            ImageUrl = "",
+            ImageUrl = imageUrl,
             OrganizerName = candidate.SourceName,
             Status = "pending",
             CreatedAt = DateTime.UtcNow,
@@ -117,6 +124,9 @@ public sealed class AdminEventSourcesController(
         var ids = request.Items.Select(item => item.CandidateId.Trim()).ToArray();
         if (ids.Any(string.IsNullOrWhiteSpace) || ids.Distinct(StringComparer.Ordinal).Count() != ids.Length)
             return BadRequest("Список содержит пустые или повторяющиеся публикации.");
+        var totalImageDataLength = request.Items.Sum(item => item.ImageUrl?.Length ?? 0);
+        if (totalImageDataLength > EventImageUrlValidator.MaxBatchImageDataLength)
+            return BadRequest("Общий размер загруженных обложек слишком большой. Отправьте несколько меньших пакетов.");
 
         await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken);
         var candidates = await db.EventSourceItems
@@ -151,6 +161,13 @@ public sealed class AdminEventSourcesController(
             var description = (item.Description ?? string.Empty).Trim();
             if (description.Length > 3000)
                 return BadRequest(new { candidateId = candidate.Id, error = "Описание не должно превышать 3000 символов." });
+            if (description.Length > 0 && !item.DescriptionPermissionConfirmed)
+                return BadRequest(new { candidateId = candidate.Id, error = "Подтвердите право использовать это описание или удалите подсказку и напишите собственный текст." });
+            var imageUrl = item.ImageUrl?.Trim() ?? "";
+            if (!string.IsNullOrEmpty(imageUrl) && !item.ImagePermissionConfirmed)
+                return BadRequest(new { candidateId = candidate.Id, error = "Подтвердите право на размещение выбранного изображения." });
+            if (!EventImageUrlValidator.IsSupported(imageUrl))
+                return BadRequest(new { candidateId = candidate.Id, error = "Выберите WebP-обложку через загрузку или укажите прямую HTTPS-ссылку на изображение." });
 
             drafts.Add((candidate, new EventItem
             {
@@ -166,7 +183,7 @@ public sealed class AdminEventSourcesController(
                 SourceUrl = candidate.SourceUrl,
                 SourceVerifiedAtUtc = DateTime.UtcNow,
                 Price = null,
-                ImageUrl = "",
+                ImageUrl = imageUrl,
                 OrganizerName = candidate.SourceName,
                 Status = "pending",
                 CreatedAt = DateTime.UtcNow,
@@ -210,6 +227,9 @@ public sealed class ConvertEventSourceItemRequest
     public string Category { get; set; } = "";
     public string HobbyId { get; set; } = "";
     public string? Description { get; set; }
+    public bool DescriptionPermissionConfirmed { get; set; }
+    public string? ImageUrl { get; set; }
+    public bool ImagePermissionConfirmed { get; set; }
     public bool SourcePermissionConfirmed { get; set; }
 }
 
@@ -243,4 +263,9 @@ public sealed class ConvertEventSourceBatchItemRequest
 
     [StringLength(3000)]
     public string? Description { get; set; } = "";
+
+    public bool DescriptionPermissionConfirmed { get; set; }
+
+    public string? ImageUrl { get; set; } = "";
+    public bool ImagePermissionConfirmed { get; set; }
 }

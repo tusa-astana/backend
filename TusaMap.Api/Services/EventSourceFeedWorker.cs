@@ -17,11 +17,18 @@ public sealed class EventSourceFeedWorker : BackgroundService
     private static readonly TimeSpan InitialDelay = TimeSpan.FromSeconds(15);
     private static readonly TimeSpan RecentPublishedWindow = TimeSpan.FromDays(120);
     private static readonly Regex HtmlTags = new("<[^>]+>", RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex HtmlBlockTags = new("</?(?:p|br|div|li|h[1-6])\\b[^>]*>", RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
     private static readonly Regex RussianEventDate = new(
         @"(?<!\d)(?<day>\d{1,2})(?:\s*[–—-]\s*\d{1,2})?\s+(?<month>января|февраля|марта|апреля|мая|июня|июля|августа|сентября|октября|ноября|декабря)(?:\s+(?<year>20\d{2}))?",
         RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
     private static readonly Regex EnglishEventDate = new(
         @"\b(?<month>January|February|March|April|May|June|July|August|September|October|November|December)\s+(?<day>\d{1,2})(?:\s+(?:to|[-–—])\s*\d{1,2})?(?:,?\s*(?<year>20\d{2}))?\b",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
+    private static readonly Regex EventTime = new(
+        @"(?<!\d)(?<hour>[01]?\d|2[0-3]):(?<minute>[0-5]\d)(?!\d)",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex ExplicitEventPlace = new(
+        @"(?:место(?:\s+проведения)?|площадка|venue|location|hall)\s*[:—-]\s*(?<place>[^\r\n.;!?]{2,120}?)(?=\s+(?:уважаемые|дорогие|приглашаем|приходите|ждём|welcome|dear|join)\b|[.!?;\r\n]|$)",
         RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
     private static readonly Dictionary<string, int> RussianMonths = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -104,14 +111,25 @@ public sealed class EventSourceFeedWorker : BackgroundService
                 if (eligible.Length == 0) continue;
 
                 var sourceIds = eligible.Select(item => item.ExternalId).Distinct(StringComparer.Ordinal).ToArray();
-                var knownIds = (await db.EventSourceItems.AsNoTracking()
+                var knownItems = await db.EventSourceItems
                     .Where(item => item.SourceId == source.Id && sourceIds.Contains(item.ExternalId))
-                    .Select(item => item.ExternalId)
-                    .ToListAsync(cancellationToken))
-                    .ToHashSet(StringComparer.Ordinal);
+                    .ToListAsync(cancellationToken);
+                var knownByExternalId = knownItems.ToDictionary(item => item.ExternalId, StringComparer.Ordinal);
 
-                foreach (var item in eligible.Where(item => !knownIds.Contains(item.ExternalId)))
+                foreach (var item in eligible)
                 {
+                    if (knownByExternalId.TryGetValue(item.ExternalId, out var existing))
+                    {
+                        if (existing.Status == "pending")
+                        {
+                            if (!string.IsNullOrWhiteSpace(item.EventTime) && !string.Equals(existing.EventTime, item.EventTime, StringComparison.Ordinal)) existing.EventTime = item.EventTime;
+                            if (!string.IsNullOrWhiteSpace(item.EventPlace) && !string.Equals(existing.EventPlace, item.EventPlace, StringComparison.Ordinal)) existing.EventPlace = item.EventPlace;
+                            if (!string.IsNullOrWhiteSpace(item.SuggestedCategory) && !string.Equals(existing.SuggestedCategory, item.SuggestedCategory, StringComparison.Ordinal)) existing.SuggestedCategory = item.SuggestedCategory;
+                            if (string.IsNullOrWhiteSpace(existing.Summary) && !string.IsNullOrWhiteSpace(item.Summary)) existing.Summary = item.Summary;
+                        }
+                        continue;
+                    }
+
                     db.EventSourceItems.Add(new EventSourceItem
                     {
                         SourceId = source.Id,
@@ -122,6 +140,9 @@ public sealed class EventSourceFeedWorker : BackgroundService
                         Summary = item.Summary,
                         HobbyId = source.HobbyId,
                         EventDate = item.EventDate,
+                        EventTime = item.EventTime,
+                        EventPlace = item.EventPlace,
+                        SuggestedCategory = item.SuggestedCategory,
                         PublishedAtUtc = item.PublishedAtUtc,
                     });
                 }
@@ -181,7 +202,7 @@ public sealed class EventSourceFeedWorker : BackgroundService
         var document = await XDocument.LoadAsync(reader, LoadOptions.None, cancellationToken);
         return document.Descendants().Where(element => element.Name.LocalName == "item")
             .Take(MaxItemsPerFeed)
-            .Select(ParseItem)
+            .Select(element => ParseItem(element, source))
             .Where(item => item is not null)
             .Select(item => item!)
             .ToArray();
@@ -224,8 +245,25 @@ public sealed class EventSourceFeedWorker : BackgroundService
                     : idElement.ValueKind == JsonValueKind.Number ? idElement.GetRawText() : null;
                 var title = CleanText(titleElement.ValueKind == JsonValueKind.String ? titleElement.GetString() : null, 180);
                 var dateText = eventDateElement.GetString();
+                var timeText = eventElement.TryGetProperty("event_time", out var timeElement) && timeElement.ValueKind == JsonValueKind.String
+                    ? timeElement.GetString()
+                    : null;
+                var hallName = eventElement.TryGetProperty("hall_name", out var hallElement) && hallElement.ValueKind == JsonValueKind.String
+                    ? hallElement.GetString()
+                    : null;
+                var sceneName = poster.TryGetProperty("scene_name", out var sceneElement) && sceneElement.ValueKind == JsonValueKind.String
+                    ? sceneElement.GetString()
+                    : null;
+                var repertoire = poster.TryGetProperty("repertoire_name", out var repertoireElement) && repertoireElement.ValueKind == JsonValueKind.String
+                    ? repertoireElement.GetString()
+                    : null;
                 if (string.IsNullOrWhiteSpace(id) || title.Length < 3 ||
                     !DateOnly.TryParseExact(dateText, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var eventDate)) continue;
+
+                var eventTime = TryParseEventTime(timeText);
+                var venue = CleanText(!string.IsNullOrWhiteSpace(sceneName) ? sceneName : hallName, 120);
+                var eventPlace = venue.Length == 0 ? "Астана Опера" : $"Астана Опера, {venue}";
+                var suggestedCategory = MapOperaCategory(repertoire, title);
 
                 var urlTemplate = string.IsNullOrWhiteSpace(source.ItemUrlTemplate)
                     ? "https://astanaopera.kz/ru/afisha/{id}"
@@ -236,13 +274,16 @@ public sealed class EventSourceFeedWorker : BackgroundService
                     title,
                     "",
                     eventDate,
-                    null));
+                    null,
+                    eventTime,
+                    eventPlace,
+                    suggestedCategory));
             }
         }
         return items;
     }
 
-    private static ParsedFeedItem? ParseItem(XElement element)
+    private static ParsedFeedItem? ParseItem(XElement element, EventSourceFeedConfig source)
     {
         var title = CleanText(element.Elements().FirstOrDefault(child => child.Name.LocalName == "title")?.Value, 180);
         var link = element.Elements().FirstOrDefault(child => child.Name.LocalName == "link")?.Value?.Trim() ?? "";
@@ -256,8 +297,61 @@ public sealed class EventSourceFeedWorker : BackgroundService
         DateTime? publishedAt = DateTimeOffset.TryParse(dateText, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var parsedDate)
             ? parsedDate.UtcDateTime
             : null;
+        var rawDescription = element.Elements().FirstOrDefault(child => child.Name.LocalName is "description" or "encoded")?.Value ?? "";
+        var sourceText = CleanText(rawDescription, 5000);
         var eventDate = ExtractEventDate(title + " " + description, publishedAt);
-        return new ParsedFeedItem(externalId, linkUri.AbsoluteUri, title, description, eventDate, publishedAt);
+        var eventTime = ExtractEventTime(sourceText);
+        var eventPlace = ExtractEventPlace(rawDescription);
+        return new ParsedFeedItem(externalId, linkUri.AbsoluteUri, title, description, eventDate, publishedAt,
+            eventTime, eventPlace, source.DefaultCategory);
+    }
+
+    private static string ExtractEventTime(string text)
+    {
+        var match = EventTime.Match(text);
+        return match.Success ? $"{int.Parse(match.Groups["hour"].Value, CultureInfo.InvariantCulture):D2}:{match.Groups["minute"].Value}" : "";
+    }
+
+    private static string ExtractEventPlace(string text)
+    {
+        var decoded = WebUtility.HtmlDecode(text);
+        var withParagraphBreaks = HtmlBlockTags.Replace(decoded, "\n");
+        var plainText = HtmlTags.Replace(withParagraphBreaks, " ");
+        var match = ExplicitEventPlace.Match(plainText);
+        if (!match.Success) return "";
+
+        var place = CleanText(match.Groups["place"].Value, 240);
+        foreach (var boundary in new[] { "уважаемые", "дорогие", "приглашаем", "приходите", "ждём", "welcome", "dear", "join" })
+        {
+            var boundaryIndex = place.IndexOf(boundary, StringComparison.OrdinalIgnoreCase);
+            if (boundaryIndex > 0) place = place[..boundaryIndex].Trim();
+        }
+        return place.Length <= 120 ? place : place[..120].Trim();
+    }
+
+    private static string TryParseEventTime(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return "";
+        return TimeOnly.TryParseExact(value, ["HH:mm:ss", "HH:mm"], CultureInfo.InvariantCulture, DateTimeStyles.None, out var time)
+            ? time.ToString("HH:mm", CultureInfo.InvariantCulture)
+            : "";
+    }
+
+    private static string MapOperaCategory(string? repertoire, string title)
+    {
+        var value = (repertoire ?? "").Trim();
+        if (value.Contains("опера", StringComparison.OrdinalIgnoreCase)) return "опера";
+        if (value.Contains("балет", StringComparison.OrdinalIgnoreCase)) return "балет";
+        if (value.Contains("концерт", StringComparison.OrdinalIgnoreCase)) return "концерт";
+
+        if (title.Contains("балет", StringComparison.OrdinalIgnoreCase) || title.Contains("томирис", StringComparison.OrdinalIgnoreCase) ||
+            title.Contains("щелкунчик", StringComparison.OrdinalIgnoreCase)) return "балет";
+        if (title.Contains("опера", StringComparison.OrdinalIgnoreCase) || title.Contains("турандот", StringComparison.OrdinalIgnoreCase) ||
+            title.Contains("алеко", StringComparison.OrdinalIgnoreCase) || title.Contains("тайный брак", StringComparison.OrdinalIgnoreCase)) return "опера";
+        if (title.Contains("concert", StringComparison.OrdinalIgnoreCase) || title.Contains("концерт", StringComparison.OrdinalIgnoreCase) ||
+            title.Contains("музык", StringComparison.OrdinalIgnoreCase) || title.Contains("flute", StringComparison.OrdinalIgnoreCase) ||
+            title.Contains("paganini", StringComparison.OrdinalIgnoreCase) || title.Contains("паганини", StringComparison.OrdinalIgnoreCase)) return "концерт";
+        return "спектакль";
     }
 
     private static DateOnly? ExtractEventDate(string text, DateTime? publishedAtUtc)
@@ -328,12 +422,22 @@ public sealed class EventSourceFeedWorker : BackgroundService
         public string Format { get; set; } = "rss";
         public string ItemUrlTemplate { get; set; } = "";
         public int PageCount { get; set; } = 1;
+        public string DefaultCategory { get; set; } = "";
         public bool RequireAstanaMention { get; set; } = true;
         public bool RequireEventKeywords { get; set; } = true;
         public bool RequireFutureEventDate { get; set; }
     }
 
-    private sealed record ParsedFeedItem(string ExternalId, string SourceUrl, string Title, string Summary, DateOnly? EventDate, DateTime? PublishedAtUtc);
+    private sealed record ParsedFeedItem(
+        string ExternalId,
+        string SourceUrl,
+        string Title,
+        string Summary,
+        DateOnly? EventDate,
+        DateTime? PublishedAtUtc,
+        string EventTime = "",
+        string EventPlace = "",
+        string SuggestedCategory = "");
 
     private sealed class LimitedReadStream : Stream
     {

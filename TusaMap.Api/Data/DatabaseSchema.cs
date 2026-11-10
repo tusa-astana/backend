@@ -161,12 +161,16 @@ public static class DatabaseSchema
             CREATE TABLE IF NOT EXISTS EventSourceItems (
                 Id TEXT NOT NULL PRIMARY KEY, SourceId TEXT NOT NULL, SourceName TEXT NOT NULL,
                 ExternalId TEXT NOT NULL, SourceUrl TEXT NOT NULL, Title TEXT NOT NULL,
-                Summary TEXT NOT NULL DEFAULT '', HobbyId TEXT NOT NULL, EventDate TEXT NULL, PublishedAtUtc TEXT NULL,
+                Summary TEXT NOT NULL DEFAULT '', HobbyId TEXT NOT NULL, EventDate TEXT NULL,
+                EventTime TEXT NOT NULL DEFAULT '', EventPlace TEXT NOT NULL DEFAULT '', SuggestedCategory TEXT NOT NULL DEFAULT '', PublishedAtUtc TEXT NULL,
                 ImportedAtUtc TEXT NOT NULL, Status TEXT NOT NULL DEFAULT 'pending', EventId TEXT NULL
             )
             """);
 
         AddColumnIfMissing(db, "EventSourceItems", "EventDate", "TEXT NULL");
+        AddColumnIfMissing(db, "EventSourceItems", "EventTime", "TEXT NOT NULL DEFAULT ''");
+        AddColumnIfMissing(db, "EventSourceItems", "EventPlace", "TEXT NOT NULL DEFAULT ''");
+        AddColumnIfMissing(db, "EventSourceItems", "SuggestedCategory", "TEXT NOT NULL DEFAULT ''");
         AddColumnIfMissing(db, "Events", "OrganizerTelegramId", "INTEGER NOT NULL DEFAULT 0");
         AddColumnIfMissing(db, "Events", "OrganizerEmail", "TEXT NOT NULL DEFAULT ''");
         AddColumnIfMissing(db, "Events", "OrganizerPhone", "TEXT NOT NULL DEFAULT ''");
@@ -280,6 +284,9 @@ public static class DatabaseSchema
         db.Database.ExecuteSqlRaw("CREATE UNIQUE INDEX IF NOT EXISTS \"IX_BotMessageLogs_UpdateId\" ON \"BotMessageLogs\" (\"UpdateId\")");
         db.Database.ExecuteSqlRaw("CREATE TABLE IF NOT EXISTS \"EventSourceItems\" (\"Id\" TEXT PRIMARY KEY, \"SourceId\" TEXT NOT NULL, \"SourceName\" TEXT NOT NULL, \"ExternalId\" TEXT NOT NULL, \"SourceUrl\" TEXT NOT NULL, \"Title\" TEXT NOT NULL, \"Summary\" TEXT NOT NULL DEFAULT '', \"HobbyId\" TEXT NOT NULL, \"EventDate\" DATE NULL, \"PublishedAtUtc\" TIMESTAMPTZ NULL, \"ImportedAtUtc\" TIMESTAMPTZ NOT NULL, \"Status\" TEXT NOT NULL DEFAULT 'pending', \"EventId\" TEXT NULL)");
         db.Database.ExecuteSqlRaw("ALTER TABLE \"EventSourceItems\" ADD COLUMN IF NOT EXISTS \"EventDate\" DATE NULL");
+        db.Database.ExecuteSqlRaw("ALTER TABLE \"EventSourceItems\" ADD COLUMN IF NOT EXISTS \"EventTime\" TEXT NOT NULL DEFAULT ''");
+        db.Database.ExecuteSqlRaw("ALTER TABLE \"EventSourceItems\" ADD COLUMN IF NOT EXISTS \"EventPlace\" TEXT NOT NULL DEFAULT ''");
+        db.Database.ExecuteSqlRaw("ALTER TABLE \"EventSourceItems\" ADD COLUMN IF NOT EXISTS \"SuggestedCategory\" TEXT NOT NULL DEFAULT ''");
         db.Database.ExecuteSqlRaw("CREATE UNIQUE INDEX IF NOT EXISTS \"IX_EventSourceItems_SourceId_ExternalId\" ON \"EventSourceItems\" (\"SourceId\", \"ExternalId\")");
         db.Database.ExecuteSqlRaw("CREATE INDEX IF NOT EXISTS \"IX_EventSourceItems_Status_ImportedAtUtc\" ON \"EventSourceItems\" (\"Status\", \"ImportedAtUtc\")");
         db.Database.ExecuteSqlRaw("ALTER TABLE \"Tickets\" ADD COLUMN IF NOT EXISTS \"TelegramPaymentChargeId\" TEXT NULL");

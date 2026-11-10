@@ -46,10 +46,10 @@ public sealed class AdminEventsController(
 
         var imageUrl = request.ImageUrl?.Trim() ?? "";
         var imageChanged = !string.Equals(imageUrl, eventItem.ImageUrl, StringComparison.Ordinal);
-        if (imageChanged && imageUrl.Length > 1500)
-            return BadRequest("Ссылка на обложку не должна превышать 1500 символов.");
-        if (imageChanged && !string.IsNullOrEmpty(imageUrl) && !IsAllowedImageUrl(imageUrl))
-            return BadRequest("Обложка должна быть прямой HTTPS-ссылкой без логина и пароля.");
+        if (imageChanged && !string.IsNullOrEmpty(imageUrl) && !request.ImagePermissionConfirmed)
+            return BadRequest("Подтвердите право на размещение выбранного изображения.");
+        if (imageChanged && !EventImageUrlValidator.IsSupported(imageUrl))
+            return BadRequest("Выберите WebP-обложку через загрузку или укажите прямую HTTPS-ссылку на изображение.");
 
         eventItem.Title = request.Title.Trim();
         eventItem.Description = request.Description?.Trim() ?? "";
@@ -68,13 +68,6 @@ public sealed class AdminEventsController(
         var user = auth.ValidateInitData(initData);
         return user is not null && users.IsAdmin(user.Id);
     }
-
-    private static bool IsAllowedImageUrl(string value)
-        => Uri.TryCreate(value, UriKind.Absolute, out var uri) &&
-           uri.Scheme == Uri.UriSchemeHttps &&
-           uri.IsDefaultPort &&
-           string.IsNullOrEmpty(uri.UserInfo) &&
-           string.IsNullOrEmpty(uri.Fragment);
 
     private static AdminEventEditResponse ToResponse(EventItem item)
         => new(item.Id, item.Title, item.Description, item.Date, item.Time, item.Place, item.Category, item.ImageUrl, item.Status);
@@ -101,6 +94,7 @@ public sealed class UpdateAdminEventRequest : IValidatableObject
     public string Category { get; set; } = "";
 
     public string? ImageUrl { get; set; } = "";
+    public bool ImagePermissionConfirmed { get; set; }
 
     public IEnumerable<ValidationResult> Validate(ValidationContext validationContext)
     {
