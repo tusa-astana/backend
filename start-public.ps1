@@ -10,7 +10,7 @@ if (-not (Get-Command cloudflared -ErrorAction SilentlyContinue)) {
 }
 
 $env:PORT = '5001'
-$env:Cors__Origins__0 = 'https://yessken.github.io'
+$env:Cors__Origins__0 = 'https://tusa-astana.github.io'
 
 Write-Host "Starting TUSA API on http://localhost:5001"
 Write-Host "Public URL must point to this machine: $publicApiUrl"

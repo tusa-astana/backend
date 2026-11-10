@@ -62,10 +62,10 @@ apiUrl: 'https://api.example.kz'
 
 ## CORS
 
-Backend уже разрешает `https://yessken.github.io`. Если появится другой frontend-домен, добавь его через переменную:
+Backend уже разрешает `https://tusa-astana.github.io` (и старый `https://yessken.github.io`). Если появится другой frontend-домен, добавь его через переменную:
 
 ```powershell
-$env:Cors__Origins__1 = 'https://another-frontend.example'
+$env:Cors__Origins__2 = 'https://another-frontend.example'
 ```
 
 ## Без домена: только временный тест

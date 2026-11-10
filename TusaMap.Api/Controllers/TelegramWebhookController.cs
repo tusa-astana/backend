@@ -241,7 +241,7 @@ public class TelegramWebhookController : ControllerBase
 
     private async Task SendWelcomeAsync(string token, long chatId, CancellationToken cancellationToken)
     {
-        var appUrl = (_configuration["Telegram:WebAppUrl"] ?? "https://yessken.github.io").TrimEnd('/');
+        var appUrl = (_configuration["Telegram:WebAppUrl"] ?? "https://tusa-astana.github.io/yessken.github.io").TrimEnd('/');
         var imageUrl = _configuration["Telegram:WelcomeImageUrl"];
         if (string.IsNullOrWhiteSpace(imageUrl)) imageUrl = $"{appUrl}/tusa-avatar.svg";
         var caption = "Привет! Это TUSA — афиша событий и мест Астаны.";
