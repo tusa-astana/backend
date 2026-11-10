@@ -82,6 +82,7 @@ dotnet run --project .\TusaMap.Api\TusaMap.Api.csproj
 - `GET /api/admin/event-sources/pending` — кандидаты из настроенных RSS-источников, только для admin `initData`
 - `POST /api/admin/event-sources/{id}/dismiss` — скрыть нерелевантный RSS-кандидат
 - `POST /api/admin/event-sources/{id}/convert` — после проверки первоисточника создать event-заявку `pending`; требуется вручную указать дату, время, место, категорию и hobby ID
+- `POST /api/admin/event-sources/convert-batch` — создать до 100 `pending` event-заявок одним запросом; для каждой выбранной публикации нужны title/date/time/place/category, а администратор явно подтверждает проверку источников/дат/разрешений. Все записи проходят обычную модерацию, автопубликации нет.
 - `GET /api/events/{id}/going` и `POST /api/events/{id}/going` — счётчик участия и переключение RSVP для проверенного Telegram-пользователя
 - `GET /api/tickets/me` — ранее оформленные/legacy записи билетов пользователя (заголовок `X-Telegram-Init-Data`); новые офлайн-билеты TUSA не продаёт
 - `POST /api/tickets` и `/api/tickets/public` — отключены. TUSA не оформляет офлайн-билеты и не принимает оплату за вход.

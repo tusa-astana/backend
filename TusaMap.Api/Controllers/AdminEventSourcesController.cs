@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.ComponentModel.DataAnnotations;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using TusaMap.Api.Data;
@@ -103,6 +104,96 @@ public sealed class AdminEventSourcesController(
         return Created($"/api/events/{eventItem.Id}", new { eventItem.Id, eventItem.Status, sourceItemId = candidate.Id });
     }
 
+    [HttpPost("convert-batch")]
+    public async Task<IActionResult> ConvertBatch(
+        [FromBody] ConvertEventSourceBatchRequest request,
+        [FromHeader(Name = "X-Telegram-Init-Data")] string? initData,
+        CancellationToken cancellationToken)
+    {
+        if (!TryGetAdmin(initData)) return StatusCode(StatusCodes.Status403Forbidden);
+        if (!request.SourcePermissionConfirmed)
+            return BadRequest("Подтвердите проверку каждого выбранного источника и разрешение на размещение краткой карточки.");
+
+        var ids = request.Items.Select(item => item.CandidateId.Trim()).ToArray();
+        if (ids.Any(string.IsNullOrWhiteSpace) || ids.Distinct(StringComparer.Ordinal).Count() != ids.Length)
+            return BadRequest("Список содержит пустые или повторяющиеся публикации.");
+
+        await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken);
+        var candidates = await db.EventSourceItems
+            .Where(item => item.Status == "pending" && ids.Contains(item.Id))
+            .ToListAsync(cancellationToken);
+        if (candidates.Count != ids.Length)
+            return Conflict("Некоторые публикации уже обработаны. Обновите список и повторите пакет.");
+
+        var candidateById = candidates.ToDictionary(item => item.Id, StringComparer.Ordinal);
+        var todayAstana = DateOnly.FromDateTime(DateTime.UtcNow.AddHours(5));
+        var drafts = new List<(EventSourceItem Candidate, EventItem Event)>();
+        foreach (var item in request.Items)
+        {
+            var candidate = candidateById[item.CandidateId.Trim()];
+            if (!DateOnly.TryParseExact(item.Date, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var date) ||
+                date < todayAstana || date > todayAstana.AddDays(365))
+                return BadRequest(new { candidateId = candidate.Id, error = "Укажите будущую дату события в пределах ближайшего года." });
+
+            var time = item.Time?.Trim() ?? "";
+            if (!string.IsNullOrWhiteSpace(time) &&
+                !TimeOnly.TryParseExact(time, "HH:mm", CultureInfo.InvariantCulture, DateTimeStyles.None, out _))
+                return BadRequest(new { candidateId = candidate.Id, error = "Время должно быть в формате ЧЧ:ММ." });
+
+            var title = item.Title.Trim();
+            var place = item.Place.Trim();
+            var category = item.Category.Trim();
+            if (title.Length is < 3 or > 120 || place.Length is < 2 or > 160 || category.Length is < 2 or > 80)
+                return BadRequest(new { candidateId = candidate.Id, error = "Проверьте название, место и категорию." });
+            if (interests.Find(candidate.HobbyId) is null)
+                return BadRequest(new { candidateId = candidate.Id, error = "Хобби источника отсутствует в каталоге TUSA." });
+
+            var description = (item.Description ?? string.Empty).Trim();
+            if (description.Length > 3000)
+                return BadRequest(new { candidateId = candidate.Id, error = "Описание не должно превышать 3000 символов." });
+
+            drafts.Add((candidate, new EventItem
+            {
+                Id = Guid.NewGuid().ToString("N"),
+                Title = title,
+                Description = description,
+                Date = date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
+                Time = time,
+                Place = place,
+                Address = "",
+                Category = category,
+                HobbyId = candidate.HobbyId,
+                SourceUrl = candidate.SourceUrl,
+                SourceVerifiedAtUtc = DateTime.UtcNow,
+                Price = null,
+                ImageUrl = "",
+                OrganizerName = candidate.SourceName,
+                Status = "pending",
+                CreatedAt = DateTime.UtcNow,
+                IsPublicEvent = true,
+                TelegramSourceUrl = "",
+                IsDemo = false,
+            }));
+        }
+
+        var claimedCount = await db.EventSourceItems
+            .Where(item => item.Status == "pending" && ids.Contains(item.Id))
+            .ExecuteUpdateAsync(update => update.SetProperty(item => item.Status, "converting"), cancellationToken);
+        if (claimedCount != ids.Length)
+            return Conflict("Часть публикаций уже обработана другим администратором. Обновите список и повторите пакет.");
+
+        foreach (var (candidate, eventItem) in drafts)
+        {
+            candidate.Status = "converted";
+            candidate.EventId = eventItem.Id;
+            db.Events.Add(eventItem);
+        }
+
+        await db.SaveChangesAsync(cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
+        return Ok(drafts.Select(item => new { candidateId = item.Candidate.Id, eventId = item.Event.Id, status = item.Event.Status }));
+    }
+
     private bool TryGetAdmin(string? initData)
     {
         var admin = auth.ValidateInitData(initData);
@@ -120,4 +211,36 @@ public sealed class ConvertEventSourceItemRequest
     public string HobbyId { get; set; } = "";
     public string? Description { get; set; }
     public bool SourcePermissionConfirmed { get; set; }
+}
+
+public sealed class ConvertEventSourceBatchRequest
+{
+    public bool SourcePermissionConfirmed { get; set; }
+
+    [Required, MinLength(1), MaxLength(100)]
+    public List<ConvertEventSourceBatchItemRequest> Items { get; set; } = [];
+}
+
+public sealed class ConvertEventSourceBatchItemRequest
+{
+    [Required, StringLength(100, MinimumLength = 1)]
+    public string CandidateId { get; set; } = "";
+
+    [Required, StringLength(120, MinimumLength = 3)]
+    public string Title { get; set; } = "";
+
+    [Required, StringLength(10)]
+    public string Date { get; set; } = "";
+
+    [StringLength(5)]
+    public string? Time { get; set; } = "";
+
+    [Required, StringLength(160, MinimumLength = 2)]
+    public string Place { get; set; } = "";
+
+    [Required, StringLength(80, MinimumLength = 2)]
+    public string Category { get; set; } = "";
+
+    [StringLength(3000)]
+    public string? Description { get; set; } = "";
 }
