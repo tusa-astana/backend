@@ -130,3 +130,9 @@ dotnet run --project .\TusaMap.Api\TusaMap.Api.csproj
 Telegram requires Stars for digital goods and services inside bots and Mini Apps. Stars must not be used for offline event admission; that is why TUSA's physical-ticket checkout remains disabled instead of being converted to Stars. Organizer Pro may use Stars only after prior terms consent and a verified `/paysupport`/refund process. See https://core.telegram.org/bots/payments-stars and https://core.telegram.org/bots/payments.
 
 Do not configure a physical payment-provider token for this product. Offline ticket sales are hard-disabled in code. Keep `Payments:OrganizerProEnabled=false` and the Stars price at `0` until the digital Organizer Pro package and its complete Telegram test, support, and refund lifecycle have been verified; both settings are required to open checkout.
+
+## Support & Sponsorship
+
+Если API и экосистема TUSA вам полезны, поддержите проект кнопкой **Sponsor** на странице репозитория.
+
+Средства пойдут на хостинг API, модерацию каталога, поддержку Telegram-бота и инфраструктуру безопасности. Спонсорство не даёт билетов на офлайн-события и не заменяет цифровые сервисы внутри Telegram.
