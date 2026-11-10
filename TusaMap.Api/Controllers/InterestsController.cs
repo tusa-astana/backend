@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text.RegularExpressions;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
@@ -20,6 +21,11 @@ public sealed class InterestsController(
     private static readonly HashSet<string> ReportReasons = new(StringComparer.Ordinal)
     {
         "spam", "harassment", "impersonation", "unsafe", "other",
+    };
+
+    private static readonly HashSet<string> CommunityPlatforms = new(StringComparer.Ordinal)
+    {
+        "telegram", "reddit",
     };
 
     [HttpGet("gatherings/upcoming")]
@@ -62,6 +68,16 @@ public sealed class InterestsController(
                 .ToListAsync(cancellationToken);
         var joined = userMemberships.Select(item => item.InterestId).ToHashSet(StringComparer.Ordinal);
         var notificationPreferences = userMemberships.ToDictionary(item => item.InterestId, item => item.NotifyNewGatherings, StringComparer.Ordinal);
+        var approvedCommunities = await db.InterestCommunities.AsNoTracking()
+            .Where(item => item.Status == "approved")
+            .OrderBy(item => item.Title)
+            .ToListAsync(cancellationToken);
+        var approvedCommunityIds = approvedCommunities.Select(item => item.Id).ToArray();
+        var communityInterestLinks = approvedCommunityIds.Length == 0
+            ? []
+            : await db.InterestCommunityInterests.AsNoTracking()
+                .Where(item => approvedCommunityIds.Contains(item.CommunityId))
+                .ToListAsync(cancellationToken);
         var counts = await db.InterestGroupMemberships.AsNoTracking()
             .GroupBy(item => item.InterestId)
             .Select(group => new { group.Key, Count = group.Count() })
@@ -89,6 +105,11 @@ public sealed class InterestsController(
         return Ok(catalog.GetGroups().Select(group => new InterestGroupResponse(
             group.Id, group.Name, group.Description, group.Emoji,
             counts.GetValueOrDefault(group.Id), joined.Contains(group.Id), notificationPreferences.GetValueOrDefault(group.Id),
+            approvedCommunities.Where(community => communityInterestLinks.Any(link =>
+                    link.CommunityId == community.Id && link.InterestId == group.Id))
+                .Select(community => new InterestCommunityResponse(
+                    community.Id, community.Title, community.Description, community.Platform, community.Url))
+                .ToArray(),
             gatherings.Where(item => item.InterestId == group.Id).Select(item => new InterestGatheringResponse(
                 item.Id, item.InterestId, item.Title, item.MeetupDate, item.StartTime,
                 item.Place, item.Details,
@@ -98,6 +119,70 @@ public sealed class InterestsController(
                 item.IsOpen,
                 user is not null && joined.Contains(group.Id) && item.IsOpen && item.HostTelegramUserId != user.Id &&
                     unreadGatheringIds.Contains(item.Id) && !attendanceRows.Any(row => row.GatheringId == item.Id && row.TelegramUserId == user.Id))).ToArray())).ToArray());
+    }
+
+    [HttpPost("communities")]
+    [EnableRateLimiting("interest-actions")]
+    public async Task<IActionResult> SubmitCommunity(
+        [FromBody] CreateInterestCommunityRequest request, CancellationToken cancellationToken)
+    {
+        var identity = auth.ValidateInitData(Request.Headers["X-Telegram-Init-Data"].ToString());
+        if (identity is null) return Unauthorized("Открой TUSA внутри Telegram, чтобы предложить сообщество.");
+        if (identity.IsBot) return Forbid();
+        if (users.Upsert(identity).IsSuspended) return Forbid();
+
+        var title = (request.Title ?? string.Empty).Trim();
+        var description = (request.Description ?? string.Empty).Trim();
+        var interestIds = (request.InterestIds ?? []).Distinct(StringComparer.Ordinal).ToArray();
+        if (title.Length is < 3 or > 100) return BadRequest("Название должно быть от 3 до 100 символов.");
+        if (description.Length > 300) return BadRequest("Описание должно быть не длиннее 300 символов.");
+        if (!CommunityPlatforms.Contains(request.Platform) || !TryNormalizeCommunityUrl(request.Platform, request.Url, out var url))
+            return BadRequest("Добавь публичную HTTPS-ссылку на Telegram- или Reddit-сообщество.");
+        if (interestIds.Length is < 1 or > 5 || interestIds.Any(id => catalog.Find(id) is null))
+            return BadRequest("Выбери от одного до пяти существующих интересов.");
+        if (await db.InterestCommunities.AnyAsync(item => item.Url == url, cancellationToken))
+            return Conflict("Это сообщество уже добавлено или ожидает проверки.");
+
+        var community = new InterestCommunity
+        {
+            Title = title,
+            Description = description,
+            Platform = request.Platform,
+            Url = url,
+        };
+        db.InterestCommunities.Add(community);
+        db.InterestCommunityInterests.AddRange(interestIds.Select(interestId => new InterestCommunityInterest
+        {
+            CommunityId = community.Id,
+            InterestId = interestId,
+        }));
+        await db.SaveChangesAsync(cancellationToken);
+        return Accepted(new { community.Id, community.Status });
+    }
+
+    private static bool TryNormalizeCommunityUrl(string platform, string? value, out string normalized)
+    {
+        normalized = string.Empty;
+        if (!Uri.TryCreate(value?.Trim(), UriKind.Absolute, out var uri) ||
+            uri.Scheme != Uri.UriSchemeHttps || !uri.IsDefaultPort ||
+            !string.IsNullOrEmpty(uri.UserInfo) || !string.IsNullOrEmpty(uri.Query) || !string.IsNullOrEmpty(uri.Fragment))
+            return false;
+
+        var path = uri.AbsolutePath;
+        var valid = platform switch
+        {
+            "telegram" => (uri.Host.Equals("t.me", StringComparison.OrdinalIgnoreCase) ||
+                           uri.Host.Equals("telegram.me", StringComparison.OrdinalIgnoreCase)) &&
+                          Regex.IsMatch(path, @"^/[A-Za-z0-9_]{5,32}/?$", RegexOptions.CultureInvariant),
+            "reddit" => (uri.Host.Equals("reddit.com", StringComparison.OrdinalIgnoreCase) ||
+                         uri.Host.Equals("www.reddit.com", StringComparison.OrdinalIgnoreCase) ||
+                         uri.Host.Equals("old.reddit.com", StringComparison.OrdinalIgnoreCase)) &&
+                        Regex.IsMatch(path, @"^/r/[A-Za-z0-9_]{2,21}/?$", RegexOptions.CultureInvariant),
+            _ => false,
+        };
+        if (!valid) return false;
+        normalized = uri.GetLeftPart(UriPartial.Path).TrimEnd('/');
+        return true;
     }
 
     [HttpPost("{interestId}/gatherings")]
@@ -429,7 +514,8 @@ public sealed class InterestsController(
 }
 
 public sealed record InterestGroupResponse(string Id, string Name, string Description, string Emoji, int MemberCount, bool IsMember,
-    bool NotifyNewGatherings, IReadOnlyList<InterestGatheringResponse> Gatherings);
+    bool NotifyNewGatherings, IReadOnlyList<InterestCommunityResponse> Communities, IReadOnlyList<InterestGatheringResponse> Gatherings);
+public sealed record InterestCommunityResponse(string Id, string Title, string Description, string Platform, string Url);
 public sealed record InterestGatheringResponse(string Id, string InterestId, string Title, string Date,
     string Time, string Place, string Details, int GoingCount, bool UserGoing, bool IsHost, bool IsOpen, bool IsNew);
 public sealed record UpcomingInterestGatheringResponse(string Id, string InterestId, string InterestName, string InterestEmoji,
@@ -439,3 +525,4 @@ public sealed record SetInterestMembershipRequest(bool IsAnonymous = true, bool 
 public sealed record CreateInterestReportRequest(long TargetTelegramUserId, string Reason, string? Details);
 public sealed record CreateInterestGatheringRequest(string Title, string Date, string Time, string Place, string? Details, bool IsOpen = true);
 public sealed record SetGatheringNotificationRequest(bool Enabled);
+public sealed record CreateInterestCommunityRequest(string? Title, string? Description, string Platform, string? Url, string[]? InterestIds);

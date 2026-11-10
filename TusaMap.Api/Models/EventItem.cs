@@ -20,6 +20,9 @@ public class EventItem
     public double Lat { get; set; }
     public double Lng { get; set; }
     public string Category { get; set; } = "";
+    public string HobbyId { get; set; } = "";
+    public string SourceUrl { get; set; } = "";
+    public DateTime? SourceVerifiedAtUtc { get; set; }
     public decimal? Price { get; set; }
     public string ImageUrl { get; set; } = "";
     public bool IsPublicEvent { get; set; }

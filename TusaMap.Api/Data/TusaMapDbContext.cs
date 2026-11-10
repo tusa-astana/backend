@@ -11,6 +11,7 @@ public class TusaMapDbContext : DbContext
     public DbSet<OrganizerSubscription> OrganizerSubscriptions => Set<OrganizerSubscription>();
     public DbSet<EventPromotion> EventPromotions => Set<EventPromotion>();
     public DbSet<EventItem> Events => Set<EventItem>();
+    public DbSet<EventSourceItem> EventSourceItems => Set<EventSourceItem>();
     public DbSet<Ticket> Tickets => Set<Ticket>();
     public DbSet<TicketCategory> TicketCategories => Set<TicketCategory>();
     public DbSet<PromoCode> PromoCodes => Set<PromoCode>();
@@ -25,6 +26,8 @@ public class TusaMapDbContext : DbContext
     public DbSet<InterestGathering> InterestGatherings => Set<InterestGathering>();
     public DbSet<InterestGatheringAttendance> InterestGatheringAttendances => Set<InterestGatheringAttendance>();
     public DbSet<InterestGatheringNotification> InterestGatheringNotifications => Set<InterestGatheringNotification>();
+    public DbSet<InterestCommunity> InterestCommunities => Set<InterestCommunity>();
+    public DbSet<InterestCommunityInterest> InterestCommunityInterests => Set<InterestCommunityInterest>();
     public DbSet<TicketCheckIn> TicketCheckIns => Set<TicketCheckIn>();
     public DbSet<BotMessageLog> BotMessageLogs => Set<BotMessageLog>();
 
@@ -36,6 +39,9 @@ public class TusaMapDbContext : DbContext
         modelBuilder.Entity<EventPromotion>().HasIndex(x => x.EventId).IsUnique();
         modelBuilder.Entity<EventPromotion>().HasIndex(x => x.TelegramPaymentChargeId).IsUnique();
         modelBuilder.Entity<EventItem>().Property(x => x.Price).HasPrecision(12, 2);
+        modelBuilder.Entity<EventItem>().HasIndex(x => x.HobbyId);
+        modelBuilder.Entity<EventSourceItem>().HasIndex(x => new { x.SourceId, x.ExternalId }).IsUnique();
+        modelBuilder.Entity<EventSourceItem>().HasIndex(x => new { x.Status, x.ImportedAtUtc });
         modelBuilder.Entity<Ticket>().HasIndex(x => x.PaymentReference).IsUnique();
         modelBuilder.Entity<Ticket>().HasIndex(x => x.TelegramPaymentChargeId).IsUnique();
         modelBuilder.Entity<Ticket>().HasIndex(x => x.ProviderPaymentChargeId).IsUnique();
@@ -69,6 +75,11 @@ public class TusaMapDbContext : DbContext
         modelBuilder.Entity<InterestGatheringAttendance>().HasIndex(x => x.TelegramUserId);
         modelBuilder.Entity<InterestGatheringNotification>().HasKey(x => new { x.GatheringId, x.TelegramUserId });
         modelBuilder.Entity<InterestGatheringNotification>().HasIndex(x => new { x.TelegramUserId, x.ReadAt });
+        modelBuilder.Entity<InterestCommunity>().HasKey(x => x.Id);
+        modelBuilder.Entity<InterestCommunity>().HasIndex(x => x.Status);
+        modelBuilder.Entity<InterestCommunity>().HasIndex(x => x.Url).IsUnique();
+        modelBuilder.Entity<InterestCommunityInterest>().HasKey(x => new { x.CommunityId, x.InterestId });
+        modelBuilder.Entity<InterestCommunityInterest>().HasIndex(x => x.InterestId);
         modelBuilder.Entity<TicketCheckIn>().HasKey(x => x.Id);
         modelBuilder.Entity<TicketCheckIn>().HasIndex(x => x.TicketId).IsUnique();
         modelBuilder.Entity<Ticket>().HasOne(x => x.CheckIn).WithOne().HasForeignKey<TicketCheckIn>(x => x.TicketId);

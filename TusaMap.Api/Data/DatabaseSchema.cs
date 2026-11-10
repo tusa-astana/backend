@@ -112,6 +112,19 @@ public static class DatabaseSchema
                 PRIMARY KEY (GatheringId, TelegramUserId)
             )
             """);
+        CreateTable(db, "InterestCommunities", """
+            CREATE TABLE IF NOT EXISTS InterestCommunities (
+                Id TEXT NOT NULL PRIMARY KEY, Title TEXT NOT NULL, Description TEXT NOT NULL DEFAULT '',
+                Platform TEXT NOT NULL, Url TEXT NOT NULL, Status TEXT NOT NULL DEFAULT 'pending',
+                CreatedAt TEXT NOT NULL, ReviewedAt TEXT NULL, ReviewedByTelegramUserId INTEGER NULL
+            )
+            """);
+        CreateTable(db, "InterestCommunityInterests", """
+            CREATE TABLE IF NOT EXISTS InterestCommunityInterests (
+                CommunityId TEXT NOT NULL, InterestId TEXT NOT NULL,
+                PRIMARY KEY (CommunityId, InterestId)
+            )
+            """);
         CreateTable(db, "OrganizerSubscriptions", """
             CREATE TABLE IF NOT EXISTS OrganizerSubscriptions (
                 TelegramUserId INTEGER NOT NULL PRIMARY KEY, Plan TEXT NOT NULL DEFAULT 'starter',
@@ -144,6 +157,14 @@ public static class DatabaseSchema
                 Content TEXT NOT NULL DEFAULT '', ReceivedAt TEXT NOT NULL
             )
             """);
+        CreateTable(db, "EventSourceItems", """
+            CREATE TABLE IF NOT EXISTS EventSourceItems (
+                Id TEXT NOT NULL PRIMARY KEY, SourceId TEXT NOT NULL, SourceName TEXT NOT NULL,
+                ExternalId TEXT NOT NULL, SourceUrl TEXT NOT NULL, Title TEXT NOT NULL,
+                Summary TEXT NOT NULL DEFAULT '', HobbyId TEXT NOT NULL, PublishedAtUtc TEXT NULL,
+                ImportedAtUtc TEXT NOT NULL, Status TEXT NOT NULL DEFAULT 'pending', EventId TEXT NULL
+            )
+            """);
 
         AddColumnIfMissing(db, "Events", "OrganizerTelegramId", "INTEGER NOT NULL DEFAULT 0");
         AddColumnIfMissing(db, "Events", "OrganizerEmail", "TEXT NOT NULL DEFAULT ''");
@@ -159,6 +180,9 @@ public static class DatabaseSchema
         AddColumnIfMissing(db, "Events", "TicketUrl", "TEXT NOT NULL DEFAULT ''");
         AddColumnIfMissing(db, "Events", "TicketSellerName", "TEXT NOT NULL DEFAULT ''");
         AddColumnIfMissing(db, "Events", "FeaturedUntilUtc", "TEXT NULL");
+        AddColumnIfMissing(db, "Events", "HobbyId", "TEXT NOT NULL DEFAULT ''");
+        AddColumnIfMissing(db, "Events", "SourceUrl", "TEXT NOT NULL DEFAULT ''");
+        AddColumnIfMissing(db, "Events", "SourceVerifiedAtUtc", "TEXT NULL");
         AddColumnIfMissing(db, "EventPromotions", "InvoiceNonce", "TEXT NULL");
         AddColumnIfMissing(db, "Users", "PhotoUrl", "TEXT NULL");
         AddColumnIfMissing(db, "Users", "IsSuspended", "INTEGER NOT NULL DEFAULT 0");
@@ -199,6 +223,9 @@ public static class DatabaseSchema
         db.Database.ExecuteSqlRaw("CREATE INDEX IF NOT EXISTS IX_FunnelEvents_CreatedAt ON FunnelEvents (CreatedAt)");
         db.Database.ExecuteSqlRaw("CREATE UNIQUE INDEX IF NOT EXISTS IX_TicketCheckIns_TicketId ON TicketCheckIns (TicketId)");
         db.Database.ExecuteSqlRaw("CREATE UNIQUE INDEX IF NOT EXISTS IX_BotMessageLogs_UpdateId ON BotMessageLogs (UpdateId)");
+        db.Database.ExecuteSqlRaw("CREATE UNIQUE INDEX IF NOT EXISTS IX_EventSourceItems_SourceId_ExternalId ON EventSourceItems (SourceId, ExternalId)");
+        db.Database.ExecuteSqlRaw("CREATE INDEX IF NOT EXISTS IX_EventSourceItems_Status_ImportedAtUtc ON EventSourceItems (Status, ImportedAtUtc)");
+        db.Database.ExecuteSqlRaw("CREATE INDEX IF NOT EXISTS IX_Events_HobbyId ON Events (HobbyId)");
         db.Database.ExecuteSqlRaw("CREATE INDEX IF NOT EXISTS IX_EventInterests_EventId ON EventInterests (EventId)");
         db.Database.ExecuteSqlRaw("CREATE INDEX IF NOT EXISTS IX_EventParticipations_EventId ON EventParticipations (EventId)");
         db.Database.ExecuteSqlRaw("CREATE INDEX IF NOT EXISTS IX_MeetupAttendances_MeetupDate_VenueId ON MeetupAttendances (MeetupDate, VenueId)");
@@ -208,6 +235,9 @@ public static class DatabaseSchema
         db.Database.ExecuteSqlRaw("CREATE INDEX IF NOT EXISTS IX_InterestGatherings_Interest_Date_Cancelled ON InterestGatherings (InterestId, MeetupDate, IsCancelled)");
         db.Database.ExecuteSqlRaw("CREATE INDEX IF NOT EXISTS IX_InterestGatheringAttendances_TelegramUserId ON InterestGatheringAttendances (TelegramUserId)");
         db.Database.ExecuteSqlRaw("CREATE INDEX IF NOT EXISTS IX_InterestGatheringNotifications_TelegramUserId_ReadAt ON InterestGatheringNotifications (TelegramUserId, ReadAt)");
+        db.Database.ExecuteSqlRaw("CREATE INDEX IF NOT EXISTS IX_InterestCommunities_Status ON InterestCommunities (Status)");
+        db.Database.ExecuteSqlRaw("CREATE UNIQUE INDEX IF NOT EXISTS IX_InterestCommunities_Url ON InterestCommunities (Url)");
+        db.Database.ExecuteSqlRaw("CREATE INDEX IF NOT EXISTS IX_InterestCommunityInterests_InterestId ON InterestCommunityInterests (InterestId)");
         db.Database.ExecuteSqlRaw("CREATE UNIQUE INDEX IF NOT EXISTS IX_Tickets_TelegramPaymentChargeId ON Tickets (TelegramPaymentChargeId)");
         db.Database.ExecuteSqlRaw("CREATE UNIQUE INDEX IF NOT EXISTS IX_Tickets_ProviderPaymentChargeId ON Tickets (ProviderPaymentChargeId)");
         db.Database.ExecuteSqlRaw("UPDATE Events SET IsDemo = 1 WHERE Id IN ('1','2','3','4') AND OrganizerTelegramId = 0");
@@ -219,6 +249,10 @@ public static class DatabaseSchema
         db.Database.ExecuteSqlRaw("ALTER TABLE \"Events\" ADD COLUMN IF NOT EXISTS \"TicketUrl\" TEXT NOT NULL DEFAULT ''");
         db.Database.ExecuteSqlRaw("ALTER TABLE \"Events\" ADD COLUMN IF NOT EXISTS \"TicketSellerName\" TEXT NOT NULL DEFAULT ''");
         db.Database.ExecuteSqlRaw("ALTER TABLE \"Events\" ADD COLUMN IF NOT EXISTS \"FeaturedUntilUtc\" TIMESTAMPTZ NULL");
+        db.Database.ExecuteSqlRaw("ALTER TABLE \"Events\" ADD COLUMN IF NOT EXISTS \"HobbyId\" TEXT NOT NULL DEFAULT ''");
+        db.Database.ExecuteSqlRaw("ALTER TABLE \"Events\" ADD COLUMN IF NOT EXISTS \"SourceUrl\" TEXT NOT NULL DEFAULT ''");
+        db.Database.ExecuteSqlRaw("ALTER TABLE \"Events\" ADD COLUMN IF NOT EXISTS \"SourceVerifiedAtUtc\" TIMESTAMPTZ NULL");
+        db.Database.ExecuteSqlRaw("CREATE INDEX IF NOT EXISTS \"IX_Events_HobbyId\" ON \"Events\" (\"HobbyId\")");
         db.Database.ExecuteSqlRaw("CREATE TABLE IF NOT EXISTS \"EventPromotions\" (\"Id\" TEXT PRIMARY KEY, \"EventId\" TEXT NOT NULL UNIQUE, \"OrganizerTelegramId\" BIGINT NOT NULL, \"StarsAmount\" INTEGER NOT NULL, \"Status\" TEXT NOT NULL DEFAULT 'pending', \"TermsAcceptedAt\" TIMESTAMPTZ NOT NULL, \"TermsVersion\" TEXT NOT NULL, \"TelegramPaymentChargeId\" TEXT NULL UNIQUE, \"InvoiceNonce\" TEXT NULL, \"CreatedAt\" TIMESTAMPTZ NOT NULL, \"ActivatedAt\" TIMESTAMPTZ NULL, \"ExpiresAt\" TIMESTAMPTZ NULL)");
         db.Database.ExecuteSqlRaw("ALTER TABLE \"EventPromotions\" ADD COLUMN IF NOT EXISTS \"InvoiceNonce\" TEXT NULL");
         db.Database.ExecuteSqlRaw("""
@@ -243,6 +277,9 @@ public static class DatabaseSchema
             )
             """);
         db.Database.ExecuteSqlRaw("CREATE UNIQUE INDEX IF NOT EXISTS \"IX_BotMessageLogs_UpdateId\" ON \"BotMessageLogs\" (\"UpdateId\")");
+        db.Database.ExecuteSqlRaw("CREATE TABLE IF NOT EXISTS \"EventSourceItems\" (\"Id\" TEXT PRIMARY KEY, \"SourceId\" TEXT NOT NULL, \"SourceName\" TEXT NOT NULL, \"ExternalId\" TEXT NOT NULL, \"SourceUrl\" TEXT NOT NULL, \"Title\" TEXT NOT NULL, \"Summary\" TEXT NOT NULL DEFAULT '', \"HobbyId\" TEXT NOT NULL, \"PublishedAtUtc\" TIMESTAMPTZ NULL, \"ImportedAtUtc\" TIMESTAMPTZ NOT NULL, \"Status\" TEXT NOT NULL DEFAULT 'pending', \"EventId\" TEXT NULL)");
+        db.Database.ExecuteSqlRaw("CREATE UNIQUE INDEX IF NOT EXISTS \"IX_EventSourceItems_SourceId_ExternalId\" ON \"EventSourceItems\" (\"SourceId\", \"ExternalId\")");
+        db.Database.ExecuteSqlRaw("CREATE INDEX IF NOT EXISTS \"IX_EventSourceItems_Status_ImportedAtUtc\" ON \"EventSourceItems\" (\"Status\", \"ImportedAtUtc\")");
         db.Database.ExecuteSqlRaw("ALTER TABLE \"Tickets\" ADD COLUMN IF NOT EXISTS \"TelegramPaymentChargeId\" TEXT NULL");
         db.Database.ExecuteSqlRaw("ALTER TABLE \"Tickets\" ADD COLUMN IF NOT EXISTS \"ProviderPaymentChargeId\" TEXT NULL");
         db.Database.ExecuteSqlRaw("ALTER TABLE \"Tickets\" ADD COLUMN IF NOT EXISTS \"PrivateAddressSentAt\" TIMESTAMPTZ NULL");
@@ -279,6 +316,11 @@ public static class DatabaseSchema
         db.Database.ExecuteSqlRaw("CREATE INDEX IF NOT EXISTS \"IX_InterestGatherings_Interest_Date_Cancelled\" ON \"InterestGatherings\" (\"InterestId\", \"MeetupDate\", \"IsCancelled\")");
         db.Database.ExecuteSqlRaw("CREATE TABLE IF NOT EXISTS \"InterestGatheringAttendances\" (\"GatheringId\" TEXT NOT NULL, \"TelegramUserId\" BIGINT NOT NULL, \"JoinedAt\" TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY (\"GatheringId\", \"TelegramUserId\"))");
         db.Database.ExecuteSqlRaw("CREATE TABLE IF NOT EXISTS \"InterestGatheringNotifications\" (\"GatheringId\" TEXT NOT NULL, \"TelegramUserId\" BIGINT NOT NULL, \"CreatedAt\" TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, \"ReadAt\" TIMESTAMPTZ NULL, PRIMARY KEY (\"GatheringId\", \"TelegramUserId\"))");
+        db.Database.ExecuteSqlRaw("CREATE TABLE IF NOT EXISTS \"InterestCommunities\" (\"Id\" TEXT PRIMARY KEY, \"Title\" TEXT NOT NULL, \"Description\" TEXT NOT NULL DEFAULT '', \"Platform\" TEXT NOT NULL, \"Url\" TEXT NOT NULL, \"Status\" TEXT NOT NULL DEFAULT 'pending', \"CreatedAt\" TIMESTAMPTZ NOT NULL, \"ReviewedAt\" TIMESTAMPTZ NULL, \"ReviewedByTelegramUserId\" BIGINT NULL)");
+        db.Database.ExecuteSqlRaw("CREATE TABLE IF NOT EXISTS \"InterestCommunityInterests\" (\"CommunityId\" TEXT NOT NULL, \"InterestId\" TEXT NOT NULL, PRIMARY KEY (\"CommunityId\", \"InterestId\"))");
+        db.Database.ExecuteSqlRaw("CREATE INDEX IF NOT EXISTS \"IX_InterestCommunities_Status\" ON \"InterestCommunities\" (\"Status\")");
+        db.Database.ExecuteSqlRaw("CREATE UNIQUE INDEX IF NOT EXISTS \"IX_InterestCommunities_Url\" ON \"InterestCommunities\" (\"Url\")");
+        db.Database.ExecuteSqlRaw("CREATE INDEX IF NOT EXISTS \"IX_InterestCommunityInterests_InterestId\" ON \"InterestCommunityInterests\" (\"InterestId\")");
         db.Database.ExecuteSqlRaw("CREATE INDEX IF NOT EXISTS \"IX_InterestGatheringNotifications_TelegramUserId_ReadAt\" ON \"InterestGatheringNotifications\" (\"TelegramUserId\", \"ReadAt\")");
         db.Database.ExecuteSqlRaw("CREATE INDEX IF NOT EXISTS \"IX_InterestGatheringAttendances_TelegramUserId\" ON \"InterestGatheringAttendances\" (\"TelegramUserId\")");
         db.Database.ExecuteSqlRaw("ALTER TABLE \"Users\" ADD COLUMN IF NOT EXISTS \"PhotoUrl\" TEXT NULL");

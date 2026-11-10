@@ -22,6 +22,8 @@ builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 builder.Services.AddHttpClient();
+builder.Services.AddHttpClient("event-source-rss", client => client.Timeout = TimeSpan.FromSeconds(15))
+    .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false });
 builder.Services.AddSingleton<IMeetupVenueCatalog, CuratedAstanaVenueCatalog>();
 builder.Services.AddRateLimiter(options =>
 {
@@ -88,6 +90,7 @@ builder.Services.AddScoped<ITelegramBotService, TelegramBotService>();
 builder.Services.AddHostedService<PrivateVenueNotifier>();
 builder.Services.AddHostedService<PendingTelegramTicketCleanupService>();
 builder.Services.AddHostedService<DailyAnalyticsReportWorker>();
+builder.Services.AddHostedService<EventSourceFeedWorker>();
 
 var allowedCorsOrigins = builder.Configuration.GetSection("Cors:Origins").Get<string[]>() ?? [];
 if (builder.Environment.IsDevelopment())
