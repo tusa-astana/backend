@@ -77,6 +77,8 @@ dotnet run --project .\TusaMap.Api\TusaMap.Api.csproj
 - `GET /api/events/pending` — список заявок для admin Telegram ID
 - `POST /api/events/{id}/approve` — одобрить событие для admin Telegram ID
 - `POST /api/events/{id}/reject` — отклонить ожидающую заявку для admin Telegram ID
+- `GET /api/admin/events` — список до 300 pending/approved событий для admin с проверенным Telegram `initData`
+- `PUT /api/admin/events/{id}` — изменить текст/дату/место и HTTPS URL обложки; статус, organizer и ticket/payment данные не изменяются; доступ только admin allowlist
 - `GET /api/admin/event-sources/pending` — кандидаты из настроенных RSS-источников, только для admin `initData`
 - `POST /api/admin/event-sources/{id}/dismiss` — скрыть нерелевантный RSS-кандидат
 - `POST /api/admin/event-sources/{id}/convert` — после проверки первоисточника создать event-заявку `pending`; требуется вручную указать дату, время, место, категорию и hobby ID
