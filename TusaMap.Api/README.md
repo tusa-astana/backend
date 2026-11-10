@@ -92,6 +92,7 @@ dotnet run --project .\TusaMap.Api\TusaMap.Api.csproj
 - `/start event_tusa-2026` — сообщает, что TUSA не продаёт офлайн-билеты и не принимает оплату за вход.
 - `/start subscribe_pro` — показывает условия и создаёт Stars invoice Organizer Pro, только если настроена цена `Payments__TelegramSubscriptionStars`.
 - `/organizerpro` — показать условия и приобрести/продлить Organizer Pro за Stars, если цена настроена.
+- `/donate` и `/start donate` — добровольная поддержка разработчика Stars (пресеты или `/donate 100`); не открывает функции и не оплачивает офлайн-вход.
 - `GET /api/events/{id}/promotion/offer`, `POST /api/events/{id}/promotion/invoice`, `POST /api/events/{id}/promotion/cancel` — владелец одобренного события может получить условия/счёт/отменить незавершённый счёт для рекламного размещения; внешний продавец и HTTPS URL обязательны. Цена по умолчанию 500 XTR, флаг по умолчанию выключен.
 - `/refundstars <Telegram_ID>` — admin-only возврат последней Organizer Pro оплаты через Telegram Stars API.
 - `/refundpromotion <Campaign_ID>` — admin-only возврат оплаченной кампании продвижения; campaign ID приходит администраторам в уведомлении об оплате.
@@ -133,6 +134,6 @@ Do not configure a physical payment-provider token for this product. Offline tic
 
 ## Support & Sponsorship
 
-Если API и экосистема TUSA вам полезны, поддержите проект кнопкой **Sponsor** на странице репозитория.
+Если API и экосистема TUSA вам полезны, поддержите проект кнопкой **Sponsor** на странице репозитория или командой `/donate` в Telegram-боте.
 
-Средства пойдут на хостинг API, модерацию каталога, поддержку Telegram-бота и инфраструктуру безопасности. Спонсорство не даёт билетов на офлайн-события и не заменяет цифровые сервисы внутри Telegram.
+Средства пойдут на хостинг API, модерацию каталога, поддержку Telegram-бота и инфраструктуру безопасности. Спонсорство и донат не дают билетов на офлайн-события и не заменяют цифровые сервисы внутри Telegram.

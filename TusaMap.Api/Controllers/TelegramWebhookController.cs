@@ -73,6 +73,10 @@ public class TelegramWebhookController : ControllerBase
             await SendMessageAsync(token, message.Chat.Id, "Чтобы связаться с поддержкой, отправьте /paysupport и описание проблемы с номером заказа в одном сообщении.", cancellationToken);
         else if (message?.From is not null && text.Equals("/start terms", StringComparison.OrdinalIgnoreCase))
             await SendTermsAsync(token, message.Chat.Id, cancellationToken);
+        else if (message?.From is not null &&
+                 (text.Equals("/start donate", StringComparison.OrdinalIgnoreCase) ||
+                  command.Equals("/donate", StringComparison.OrdinalIgnoreCase)))
+            await StartDeveloperSupportAsync(token, message, argument, cancellationToken);
         else if (message?.From is not null && text.StartsWith("/start event_", StringComparison.OrdinalIgnoreCase))
             await StartEventPaymentAsync(token, message, text[13..].Trim(), cancellationToken);
         else if (message?.From is not null && text.StartsWith("/start interest_", StringComparison.OrdinalIgnoreCase))
@@ -93,6 +97,12 @@ public class TelegramWebhookController : ControllerBase
                 (callback.Data == "agree_subpro_20260928" || callback.Data == "agree_subpro_20261105") &&
                 callback.Message is not null)
                 await AcceptSubscriptionTermsAndInvoiceAsync(token, callback, cancellationToken);
+            else if (callback.From is not null && callback.Message is not null && callback.Data == "donate_menu")
+                await StartDeveloperSupportAsync(token, callback.Message, callback.From, "", cancellationToken);
+            else if (callback.From is not null && callback.Message is not null &&
+                     callback.Data?.StartsWith("donate_", StringComparison.Ordinal) == true &&
+                     int.TryParse(callback.Data["donate_".Length..], out var donateStars))
+                await SendDonationInvoiceAsync(token, callback.Message.Chat.Id, callback.From.Id, donateStars, cancellationToken);
             else if (callback.From is not null && callback.Message is not null && callback.Data?.StartsWith("accept_ticket_", StringComparison.Ordinal) == true)
                 await AcceptTicketTermsAndInvoiceAsync(token, callback, callback.Data[14..], cancellationToken);
         }
@@ -102,7 +112,9 @@ public class TelegramWebhookController : ControllerBase
             var query = update.PreCheckoutQuery;
             var valid = query.From is not null && (query.InvoicePayload.StartsWith("eventpromo:", StringComparison.OrdinalIgnoreCase)
                 ? await IsValidEventPromotionInvoiceAsync(query.InvoicePayload, query.Currency, query.TotalAmount, query.From.Id, "pending", cancellationToken)
-                : IsValidInvoice(query.InvoicePayload, query.Currency, query.TotalAmount, query.From.Id));
+                : query.InvoicePayload.StartsWith("donation:", StringComparison.OrdinalIgnoreCase)
+                    ? IsValidDonationInvoice(query.InvoicePayload, query.Currency, query.TotalAmount, query.From.Id)
+                    : IsValidInvoice(query.InvoicePayload, query.Currency, query.TotalAmount, query.From.Id));
             if (valid && query.InvoicePayload.StartsWith("eventpromo:", StringComparison.OrdinalIgnoreCase))
             {
                 var parts = query.InvoicePayload.Split(':', StringSplitOptions.TrimEntries);
@@ -124,7 +136,8 @@ public class TelegramWebhookController : ControllerBase
                 }
             }
             if (valid && !query.InvoicePayload.StartsWith("subscription:", StringComparison.OrdinalIgnoreCase) &&
-                !query.InvoicePayload.StartsWith("eventpromo:", StringComparison.OrdinalIgnoreCase))
+                !query.InvoicePayload.StartsWith("eventpromo:", StringComparison.OrdinalIgnoreCase) &&
+                !query.InvoicePayload.StartsWith("donation:", StringComparison.OrdinalIgnoreCase))
             {
                 var ticket = _tickets.GetByPaymentReference(query.InvoicePayload);
                 if (ticket is not null)
@@ -136,7 +149,9 @@ public class TelegramWebhookController : ControllerBase
             }
             var errorMessage = query.InvoicePayload.StartsWith("eventpromo:", StringComparison.OrdinalIgnoreCase)
                 ? "Продвижение недоступно или сумма/условия не совпадают. Счёт не подтверждён; оплата не выполнена."
-                : "Оплата офлайн-билетов в TUSA отключена. Для вопросов по уже оформленному заказу используйте /paysupport.";
+                : query.InvoicePayload.StartsWith("donation:", StringComparison.OrdinalIgnoreCase)
+                    ? "Донат недоступен или сумма не совпадает. Счёт не подтверждён; оплата не выполнена."
+                    : "Оплата офлайн-билетов в TUSA отключена. Для вопросов по уже оформленному заказу используйте /paysupport.";
             var answer = valid
                 ? new { pre_checkout_query_id = query.Id, ok = true, error_message = (string?)null }
                 : new { pre_checkout_query_id = query.Id, ok = false, error_message = (string?)errorMessage };
@@ -158,6 +173,11 @@ public class TelegramWebhookController : ControllerBase
             {
                 if (IsValidInvoice(payment.InvoicePayload, payment.Currency, payment.TotalAmount, payerId))
                     await ActivateSubscriptionAsync(token, update.Message.Chat.Id, payment.InvoicePayload, payment.TelegramPaymentChargeId, cancellationToken);
+            }
+            else if (payment.InvoicePayload.StartsWith("donation:", StringComparison.OrdinalIgnoreCase))
+            {
+                if (IsValidDonationInvoice(payment.InvoicePayload, payment.Currency, payment.TotalAmount, payerId))
+                    await ConfirmDonationAsync(token, update.Message.Chat.Id, payerId, payment.TotalAmount, payment.TelegramPaymentChargeId, cancellationToken);
             }
             else
             {
@@ -233,6 +253,7 @@ public class TelegramWebhookController : ControllerBase
             termsUrl = $"{_configuration["Telegram:WebAppUrl"]?.TrimEnd('/')}/terms";
         var text = $"Условия TUSA\n\n" +
                    "TUSA помогает находить события и отмечать интерес, но не продаёт офлайн-билеты и не принимает оплату за вход. Отметка участия не является билетом или бронированием.\n\n" +
+                   "Добровольная поддержка разработчика через /donate — это не оплата события и не покупка функции. Сумма выбирается вами, товар или услуга не выдаются; вопросы и возвраты — через /paysupport.\n\n" +
                    "Цифровое промо события, если оно включено, оплачивается только Telegram Stars после показа цены и подтверждения условий. Оно не гарантирует охват, RSVP или продажу билетов; билеты продаёт указанный внешний дистрибьютор. Вопросы по оплате и возврату — через /paysupport.\n\n" +
                    "Organizer Pro — отдельная цифровая услуга внутри Telegram. Если подписка включена, цена и условия показываются до оплаты; вопросы и возвраты — через /paysupport.\n\n" +
                    $"Полный текст: {termsUrl}";
@@ -244,12 +265,13 @@ public class TelegramWebhookController : ControllerBase
         var appUrl = (_configuration["Telegram:WebAppUrl"] ?? "https://tusa-astana.github.io/yessken.github.io").TrimEnd('/');
         var imageUrl = _configuration["Telegram:WelcomeImageUrl"];
         if (string.IsNullOrWhiteSpace(imageUrl)) imageUrl = $"{appUrl}/tusa-avatar.svg";
-        var caption = "Привет! Это TUSA — афиша событий и мест Астаны.";
+        var caption = "Привет! Это TUSA — афиша событий и мест Астаны. Поддержать разработку можно командой /donate.";
         var replyMarkup = new
         {
             inline_keyboard = new object[][]
             {
                 [new { text = "Открыть афишу TUSA", web_app = new { url = $"{appUrl}/events" } }],
+                [new { text = "Поддержать разработчика ⭐", callback_data = "donate_menu" }],
             }
         };
 
@@ -461,6 +483,99 @@ public class TelegramWebhookController : ControllerBase
         await _db.SaveChangesAsync(cancellationToken);
         await SendMessageAsync(token, chatId, "Stars-платёж подтверждён. Промо отмечено в TUSA до даты события; билеты продаёт указанный внешний дистрибьютор.", cancellationToken);
         await _telegramBot.NotifyAdminsOfEventPromotionAsync(payerId, ev.Id, campaign.Id, totalAmount, cancellationToken);
+    }
+
+    private Task StartDeveloperSupportAsync(string token, TelegramMessage message, string argument, CancellationToken cancellationToken)
+        => StartDeveloperSupportAsync(token, message.Chat.Id, message.From!, argument, cancellationToken);
+
+    private Task StartDeveloperSupportAsync(string token, TelegramMessage message, TelegramUser from, string argument, CancellationToken cancellationToken)
+        => StartDeveloperSupportAsync(token, message.Chat.Id, from, argument, cancellationToken);
+
+    private async Task StartDeveloperSupportAsync(string token, long chatId, TelegramUser from, string argument, CancellationToken cancellationToken)
+    {
+        if (!_configuration.GetValue("Payments:DeveloperSupportEnabled", true))
+        {
+            await SendMessageAsync(token, chatId, "Добровольная поддержка временно недоступна.", cancellationToken);
+            return;
+        }
+
+        if (int.TryParse(argument, out var customStars))
+        {
+            await SendDonationInvoiceAsync(token, chatId, from.Id, customStars, cancellationToken);
+            return;
+        }
+
+        var amounts = GetDonationAmounts();
+        if (amounts.Length == 0)
+        {
+            await SendMessageAsync(token, chatId, "Суммы поддержки пока не настроены.", cancellationToken);
+            return;
+        }
+
+        var buttons = amounts
+            .Select(amount => new[] { new { text = $"{amount} ⭐", callback_data = $"donate_{amount}" } })
+            .ToArray();
+        await _clients.CreateClient().PostAsJsonAsync($"https://api.telegram.org/bot{token}/sendMessage", new
+        {
+            chat_id = chatId,
+            text = "Спасибо, что хотите поддержать TUSA.\n\nЭто добровольный донат разработчику в Telegram Stars: он не открывает платные функции и не является оплатой офлайн-события. Выберите сумму или отправьте /donate 100 с числом от 1 до 2500. Вопросы и возвраты — через /paysupport.",
+            reply_markup = new { inline_keyboard = buttons },
+        }, cancellationToken);
+    }
+
+    private async Task SendDonationInvoiceAsync(string token, long chatId, long userId, int stars, CancellationToken cancellationToken)
+    {
+        if (!_configuration.GetValue("Payments:DeveloperSupportEnabled", true))
+        {
+            await SendMessageAsync(token, chatId, "Добровольная поддержка временно недоступна.", cancellationToken);
+            return;
+        }
+
+        if (stars is < 1 or > 2500)
+        {
+            await SendMessageAsync(token, chatId, "Сумма доната должна быть от 1 до 2500 Stars. Пример: /donate 100", cancellationToken);
+            return;
+        }
+
+        var payload = $"donation:{userId}:{stars}";
+        var response = await _clients.CreateClient().PostAsJsonAsync($"https://api.telegram.org/bot{token}/sendInvoice", new
+        {
+            chat_id = chatId,
+            title = "Поддержка TUSA",
+            description = "Добровольный донат разработчику. Не открывает функции и не оплачивает офлайн-события.",
+            payload,
+            provider_token = "",
+            currency = "XTR",
+            prices = new[] { new { label = "Поддержка разработчика", amount = stars } },
+        }, cancellationToken);
+        if (!response.IsSuccessStatusCode)
+            await SendMessageAsync(token, chatId, "Не удалось открыть счёт на донат. Попробуйте позже или напишите /paysupport.", cancellationToken);
+    }
+
+    private async Task ConfirmDonationAsync(string token, long chatId, long payerId, int stars, string chargeId, CancellationToken cancellationToken)
+    {
+        await SendMessageAsync(token, chatId,
+            $"Спасибо! Получили {stars} ⭐ на поддержку разработки TUSA. Это не подписка и не билет. Если нужен возврат — /paysupport.",
+            cancellationToken);
+        await _telegramBot.NotifyAdminsOfDonationAsync(payerId, stars, chargeId, cancellationToken);
+    }
+
+    private int[] GetDonationAmounts()
+    {
+        var configured = _configuration.GetSection("Payments:DeveloperSupportAmounts").Get<int[]>() ?? [50, 100, 250, 500];
+        return configured.Where(amount => amount is >= 1 and <= 2500).Distinct().OrderBy(amount => amount).ToArray();
+    }
+
+    private bool IsValidDonationInvoice(string payload, string currency, int totalAmount, long payerId)
+    {
+        if (!_configuration.GetValue("Payments:DeveloperSupportEnabled", true) ||
+            !string.Equals(currency, "XTR", StringComparison.Ordinal)) return false;
+        var parts = payload.Split(':', StringSplitOptions.TrimEntries);
+        return parts.Length == 3 &&
+               parts[0].Equals("donation", StringComparison.OrdinalIgnoreCase) &&
+               long.TryParse(parts[1], out var donorId) && donorId == payerId &&
+               int.TryParse(parts[2], out var stars) && stars is >= 1 and <= 2500 &&
+               totalAmount == stars;
     }
 
     private async Task StartSubscriptionPaymentAsync(string token, TelegramMessage message, CancellationToken cancellationToken)

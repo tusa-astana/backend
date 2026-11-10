@@ -9,6 +9,7 @@ public interface ITelegramBotService
     Task SendTicketAsync(Ticket ticket, CancellationToken cancellationToken = default);
     Task NotifyAdminsOfTicketSaleAsync(Ticket ticket, CancellationToken cancellationToken = default);
     Task NotifyAdminsOfSubscriptionAsync(long telegramUserId, int stars, CancellationToken cancellationToken = default);
+    Task NotifyAdminsOfDonationAsync(long telegramUserId, int stars, string chargeId, CancellationToken cancellationToken = default);
     Task NotifyAdminsOfEventPromotionAsync(long telegramUserId, string eventId, string campaignId, int stars, CancellationToken cancellationToken = default);
     Task<bool> NotifyAdminsOfDailyAnalyticsAsync(string text, CancellationToken cancellationToken = default);
     Task NotifyAdminsOfEventSubmissionAsync(EventItem eventItem, CancellationToken cancellationToken = default);
@@ -54,6 +55,9 @@ public class TelegramBotService : ITelegramBotService
 
     public Task NotifyAdminsOfSubscriptionAsync(long telegramUserId, int stars, CancellationToken cancellationToken = default)
         => NotifyAdminsAsync($"Новая оплата Organizer Pro\nTelegram ID: {telegramUserId}\nСумма: {stars} ⭐\nСрок: 30 дней", cancellationToken);
+
+    public Task NotifyAdminsOfDonationAsync(long telegramUserId, int stars, string chargeId, CancellationToken cancellationToken = default)
+        => NotifyAdminsAsync($"Добровольная поддержка разработчика\nTelegram ID: {telegramUserId}\nСумма: {stars} ⭐\nCharge ID: {chargeId}", cancellationToken);
 
     public Task NotifyAdminsOfEventPromotionAsync(long telegramUserId, string eventId, string campaignId, int stars, CancellationToken cancellationToken = default)
         => NotifyAdminsAsync($"Оплачено продвижение события\nEvent ID: {eventId}\nCampaign ID: {campaignId}\nВозврат: /refundpromotion {campaignId}\nTelegram ID организатора: {telegramUserId}\nСумма: {stars} ⭐", cancellationToken);
@@ -301,10 +305,11 @@ public class TelegramBotService : ITelegramBotService
             {
                 commands = new[]
                 {
+                    new { command = "start", description = "Открыть TUSA" },
+                    new { command = "donate", description = "Поддержать разработчика Stars" },
                     new { command = "terms", description = "Условия сервиса и покупки" },
                     new { command = "paysupport", description = "Помощь с оплатой и возвратом" },
                     new { command = "organizerpro", description = "Подписка для организаторов" },
-                    new { command = "start", description = "Открыть TUSA" },
                 }
             }, cancellationToken);
         if (!commandsResponse.IsSuccessStatusCode)
