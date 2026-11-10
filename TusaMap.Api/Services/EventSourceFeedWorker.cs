@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Net;
 using System.Text.RegularExpressions;
+using System.Text.Json;
 using System.Xml;
 using System.Xml.Linq;
 using Microsoft.EntityFrameworkCore;
@@ -95,7 +96,7 @@ public sealed class EventSourceFeedWorker : BackgroundService
                     .Where(item => Uri.TryCreate(item.SourceUrl, UriKind.Absolute, out var itemUri) &&
                                    allowedHosts.Any(host => string.Equals(itemUri.Host, host, StringComparison.OrdinalIgnoreCase)))
                     .Where(item => !source.RequireAstanaMention || MentionsAstana(item.Title + " " + item.Summary))
-                    .Where(item => LooksLikeEventNotice(item.Title + " " + item.Summary, source.EventKeywords))
+                    .Where(item => !source.RequireEventKeywords || LooksLikeEventNotice(item.Title + " " + item.Summary, source.EventKeywords))
                     .Where(item => !source.RequireFutureEventDate || item.EventDate is { } eventDate && eventDate >= todayAstana)
                     .DistinctBy(item => item.ExternalId, StringComparer.Ordinal)
                     .Take(MaxItemsPerFeed)
@@ -148,6 +149,9 @@ public sealed class EventSourceFeedWorker : BackgroundService
 
     private async Task<IReadOnlyList<ParsedFeedItem>> FetchFeedAsync(EventSourceFeedConfig source, CancellationToken cancellationToken)
     {
+        if (string.Equals(source.Format, "astana-opera-json", StringComparison.OrdinalIgnoreCase))
+            return await FetchAstanaOperaPostersAsync(source, cancellationToken);
+
         var uri = new Uri(source.FeedUrl);
         using var request = new HttpRequestMessage(HttpMethod.Get, uri);
         request.Headers.UserAgent.ParseAdd("TUSA-EventSourceReader/1.0 (+https://yessken.github.io/terms)");
@@ -181,6 +185,61 @@ public sealed class EventSourceFeedWorker : BackgroundService
             .Where(item => item is not null)
             .Select(item => item!)
             .ToArray();
+    }
+
+    private async Task<IReadOnlyList<ParsedFeedItem>> FetchAstanaOperaPostersAsync(EventSourceFeedConfig source, CancellationToken cancellationToken)
+    {
+        var items = new List<ParsedFeedItem>();
+        var pageCount = Math.Clamp(source.PageCount, 1, 5);
+        for (var page = 1; page <= pageCount; page++)
+        {
+            var builder = new UriBuilder(source.FeedUrl) { Query = $"page={page}&lang=ru&limit=12" };
+            using var request = new HttpRequestMessage(HttpMethod.Get, builder.Uri);
+            request.Headers.UserAgent.ParseAdd("TUSA-EventSourceReader/1.0 (+https://yessken.github.io/terms)");
+            request.Headers.Accept.ParseAdd("application/json");
+            using var response = await _clients.CreateClient("event-source-rss")
+                .SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+            if (!response.IsSuccessStatusCode)
+                throw new HttpRequestException($"Astana Opera calendar returned HTTP {(int)response.StatusCode}.");
+            if (response.Content.Headers.ContentLength is > MaxFeedBytes)
+                throw new InvalidDataException("Astana Opera calendar response exceeds the configured size limit.");
+
+            await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
+            using var limited = new LimitedReadStream(stream, MaxFeedBytes);
+            using var document = await JsonDocument.ParseAsync(limited, cancellationToken: cancellationToken);
+            if (!document.RootElement.TryGetProperty("data", out var envelope) ||
+                !envelope.TryGetProperty("data", out var posters) || posters.ValueKind != JsonValueKind.Array)
+                throw new InvalidDataException("Astana Opera calendar response has an unexpected shape.");
+
+            foreach (var poster in posters.EnumerateArray())
+            {
+                if (!poster.TryGetProperty("id", out var idElement) ||
+                    !poster.TryGetProperty("title", out var titleElement) ||
+                    !poster.TryGetProperty("event", out var eventElement) ||
+                    eventElement.ValueKind != JsonValueKind.Object ||
+                    !eventElement.TryGetProperty("event_date", out var eventDateElement)) continue;
+
+                var id = idElement.ValueKind == JsonValueKind.String
+                    ? idElement.GetString()
+                    : idElement.ValueKind == JsonValueKind.Number ? idElement.GetRawText() : null;
+                var title = CleanText(titleElement.ValueKind == JsonValueKind.String ? titleElement.GetString() : null, 180);
+                var dateText = eventDateElement.GetString();
+                if (string.IsNullOrWhiteSpace(id) || title.Length < 3 ||
+                    !DateOnly.TryParseExact(dateText, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var eventDate)) continue;
+
+                var urlTemplate = string.IsNullOrWhiteSpace(source.ItemUrlTemplate)
+                    ? "https://astanaopera.kz/ru/afisha/{id}"
+                    : source.ItemUrlTemplate;
+                items.Add(new ParsedFeedItem(
+                    id,
+                    urlTemplate.Replace("{id}", Uri.EscapeDataString(id), StringComparison.Ordinal),
+                    title,
+                    "",
+                    eventDate,
+                    null));
+            }
+        }
+        return items;
     }
 
     private static ParsedFeedItem? ParseItem(XElement element)
@@ -266,7 +325,11 @@ public sealed class EventSourceFeedWorker : BackgroundService
         public string HobbyId { get; set; } = "";
         public string[]? AllowedHosts { get; set; }
         public string[]? EventKeywords { get; set; }
+        public string Format { get; set; } = "rss";
+        public string ItemUrlTemplate { get; set; } = "";
+        public int PageCount { get; set; } = 1;
         public bool RequireAstanaMention { get; set; } = true;
+        public bool RequireEventKeywords { get; set; } = true;
         public bool RequireFutureEventDate { get; set; }
     }
 
