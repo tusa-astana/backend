@@ -18,7 +18,7 @@ public sealed class AdminEventsController(
     [HttpGet]
     public async Task<IActionResult> Get([FromHeader(Name = "X-Telegram-Init-Data")] string? initData, CancellationToken cancellationToken)
     {
-        if (!TryGetAdmin(initData)) return Forbid();
+        if (!TryGetAdmin(initData)) return StatusCode(StatusCodes.Status403Forbidden);
 
         var events = await db.Events.AsNoTracking()
             .Where(item => item.Status == "pending" || item.Status == "approved")
@@ -38,7 +38,7 @@ public sealed class AdminEventsController(
         [FromHeader(Name = "X-Telegram-Init-Data")] string? initData,
         CancellationToken cancellationToken)
     {
-        if (!TryGetAdmin(initData)) return Forbid();
+        if (!TryGetAdmin(initData)) return StatusCode(StatusCodes.Status403Forbidden);
 
         var eventItem = await db.Events.FirstOrDefaultAsync(
             item => item.Id == id && (item.Status == "pending" || item.Status == "approved"), cancellationToken);
